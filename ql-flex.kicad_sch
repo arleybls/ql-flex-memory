@@ -5,10 +5,10 @@
 	(uuid "6a3b12bb-c660-411d-baf4-d16c05c8b5f5")
 	(paper "A4")
 	(title_block
-		(title "External Expansion 512Kb memory for Sinclair QL")
-		(date "2024-11-22")
+		(title "QL Flex Memory Expansion")
+		(date "2026-08-07")
 		(rev "3")
-		(company "(C) 2022 Alvaro Alea Fdz")
+		(company "(C) 2026 Arley Silveira + (C) Alvaro Alea")
 		(comment 1 "https://ohwr.org/cern_ohl_s_v2.txt")
 		(comment 2 "CERN Open Hardware Licence Version 2 - Strongly Reciprocal")
 		(comment 3 "Under License")
