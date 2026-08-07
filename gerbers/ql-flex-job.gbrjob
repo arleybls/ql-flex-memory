@@ -3,14 +3,14 @@
     "GenerationSoftware": {
       "Vendor": "KiCad",
       "Application": "Pcbnew",
-      "Version": "8.0.1"
+      "Version": "10.0.1"
     },
-    "CreationDate": "2025-01-20T18:27:25+01:00"
+    "CreationDate": "2026-08-07T21:40:12+02:00"
   },
   "GeneralSpecs": {
     "ProjectId": {
-      "Name": "qlexternal512kram_MIX",
-      "GUID": "716c6578-7465-4726-9e61-6c3531326b72",
+      "Name": "ql-flex",
+      "GUID": "716c2d66-6c65-4782-9e6b-696361645f70",
       "Revision": "3"
     },
     "Size": {
@@ -34,47 +34,47 @@
   ],
   "FilesAttributes": [
     {
-      "Path": "qlexternal512kram_MIX-F_Cu.gbr",
+      "Path": "ql-flex-F_Cu.gbr",
       "FileFunction": "Copper,L1,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-B_Cu.gbr",
+      "Path": "ql-flex-B_Cu.gbr",
       "FileFunction": "Copper,L2,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-F_Paste.gbr",
+      "Path": "ql-flex-F_Paste.gbr",
       "FileFunction": "SolderPaste,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-B_Paste.gbr",
+      "Path": "ql-flex-B_Paste.gbr",
       "FileFunction": "SolderPaste,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-F_Silkscreen.gbr",
+      "Path": "ql-flex-F_Silkscreen.gbr",
       "FileFunction": "Legend,Top",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-B_Silkscreen.gbr",
+      "Path": "ql-flex-B_Silkscreen.gbr",
       "FileFunction": "Legend,Bot",
       "FilePolarity": "Positive"
     },
     {
-      "Path": "qlexternal512kram_MIX-F_Mask.gbr",
+      "Path": "ql-flex-F_Mask.gbr",
       "FileFunction": "SolderMask,Top",
       "FilePolarity": "Negative"
     },
     {
-      "Path": "qlexternal512kram_MIX-B_Mask.gbr",
+      "Path": "ql-flex-B_Mask.gbr",
       "FileFunction": "SolderMask,Bot",
       "FilePolarity": "Negative"
     },
     {
-      "Path": "qlexternal512kram_MIX-Edge_Cuts.gbr",
+      "Path": "ql-flex-Edge_Cuts.gbr",
       "FileFunction": "Profile",
       "FilePolarity": "Positive"
     }
