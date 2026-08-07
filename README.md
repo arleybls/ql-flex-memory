@@ -16,7 +16,7 @@ Original project: https://github.com/alvaroalea/QL_512kb_External_Expansion
 * Resistors and 100nF capacitors changed from 1206 to 0805.
 * The silkscreen now carries the memory configuration table
   (00-512kB / 01-256kB / 10-192kB / 11-128kB), NORMAL/TRUMP labels for the mode
-  header, the board dimensions, and a JLCPCB order-number marker.
+  header, and the board dimensions.
 * Fabrication outputs are simplified to a single `gerbers/` folder.
 
 Board size (97.79 × 35.56 mm) and the circuit itself are unchanged from the
