@@ -243,12 +243,12 @@ reloc_go:
         move.w  #8191,d0
 .cs:    clr.l   (a0)+
         dbra    d0,.cs
-        moveq   #0,d0
-        bsr     scr_at
+        movea.l #SCREEN+34,a5   ; double-size title, centred
         lea     s_title(pc),a0
-        bsr     puts
-        moveq   #2,d0
+        bsr     puts_big
+        moveq   #3,d0           ; window line, centred (26 chars)
         bsr     scr_at
+        lea     34(a5),a5
         lea     s_window(pc),a0
         bsr     puts
         move.l  a2,d0
@@ -279,6 +279,7 @@ reloc_go:
 .failed:
         moveq   #20,d0
         bsr     scr_at
+        lea     30(a5),a5       ; centre the 30-char detail line
         lea     s_failat(pc),a0
         bsr     puts
         move.l  4(a4),d0
@@ -303,6 +304,7 @@ reloc_go:
         bsr     prog_done
         moveq   #22,d0
         bsr     scr_at
+        lea     44(a5),a5       ; centre the 15-char done line
         lea     s_done(pc),a0
         bsr     puts
 .stop:  bra     .stop
@@ -324,6 +326,7 @@ suite_scr:
         moveq   #3,d0           ; row = 3 + test number
         add.w   d4,d0
         bsr     scr_at
+        lea     42(a5),a5       ; centre the list block
         lea     s_test(pc),a0
         bsr     puts
         move.b  #'0',d0
@@ -759,6 +762,54 @@ putc:                           ; d0.b = character (see charmap)
         movem.l (sp)+,d0-d2/a0-a1
         rts
 
+; double-size (16x16) text: each glyph pixel becomes 2x2
+puts_big:                       ; a0 = string, a5 = cursor
+        movem.l d0/a0,-(sp)
+.l:     move.b  (a0)+,d0
+        beq     .e
+        bsr     putbig
+        bra     .l
+.e:     movem.l (sp)+,d0/a0
+        rts
+
+putbig:                         ; d0.b = character; cursor advances 4
+        movem.l d1-d5/a0-a1,-(sp)
+        bsr     glyphof
+        move.l  (a0)+,d4        ; glyph rows 0-3
+        move.l  (a0),d5         ; glyph rows 4-7
+        lea     dbltab(pc),a0
+        movea.l a5,a1
+        moveq   #3,d2
+.l1:    rol.l   #8,d4
+        move.w  d4,d3
+        bsr     .row
+        dbra    d2,.l1
+        moveq   #3,d2
+.l2:    rol.l   #8,d5
+        move.w  d5,d3
+        bsr     .row
+        dbra    d2,.l2
+        addq.l  #4,a5
+        movem.l (sp)+,d1-d5/a0-a1
+        rts
+.row:   move.w  d3,d1           ; expand one glyph row to 16px, draw twice
+        lsr.w   #4,d1
+        andi.w  #$0F,d1
+        move.b  0(a0,d1.w),d1
+        andi.w  #$0F,d3
+        move.b  0(a0,d3.w),d3
+        move.b  d1,(a1)
+        move.b  d1,1(a1)
+        move.b  d3,2(a1)
+        move.b  d3,3(a1)
+        lea     128(a1),a1
+        move.b  d1,(a1)
+        move.b  d1,1(a1)
+        move.b  d3,2(a1)
+        move.b  d3,3(a1)
+        lea     128(a1),a1
+        rts
+
 puthexl:                        ; d0.l as 8 hex digits
         movem.l d0-d2,-(sp)
         moveq   #7,d2
@@ -1160,6 +1211,9 @@ n2:     dc.b    'ADDR BUS',0
 n3:     dc.b    'ALIAS',0
 n4:     dc.b    'MARCH C-',0
 n5:     dc.b    'PATTERN',0
+
+dbltab: dc.b    $00,$03,$0C,$0F,$30,$33,$3C,$3F ; nibble -> doubled bits
+        dc.b    $C0,$C3,$CC,$CF,$F0,$F3,$FC,$FF
 
 charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U',0
 
