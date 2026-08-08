@@ -14,8 +14,8 @@ actual test loops at full machine speed with a live progress overlay.
 The program is a diagnostic instrument rather than a simple pass/fail checker.
 All five tests run even after a failure, so one session can report every problem
 it finds. The results screen shows a
-per-test OK/FAIL matrix with cumulative fail counts across passes, the
-first failing address with expected/read bytes. Because the board has a single
+per-test OK/FAIL matrix with cumulative fail counts across passes, and the
+first failing address with the expected and read bytes. Because the board has a single
 8-bit SRAM, it can identify stuck data lines D0 through D7 or suggest a
 GAL/address-decode problem for address-type
 failures. Multi-pass soak runs keep intermittent faults visible
