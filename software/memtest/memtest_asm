@@ -244,18 +244,22 @@ reloc_go:
         move.w  #8191,d0
 .cs:    clr.l   (a0)+
         dbra    d0,.cs
-        movea.l #SCREEN+34,a5   ; double-size title, centred
+        movea.l #SCREEN+1024+34,a5 ; double-size title, centred, row 1
         lea     s_title(pc),a0
         bsr     puts_big
-        moveq   #3,d0           ; window line, centred (26 chars)
+        moveq   #4,d0           ; window line, centred (28 chars)
         bsr     scr_at
-        lea     34(a5),a5
+        lea     32(a5),a5
         lea     s_window(pc),a0
         bsr     puts
+        moveq   #'$',d0
+        bsr     putc
         move.l  a2,d0
         bsr     puthexl
         lea     s_dash(pc),a0
         bsr     puts
+        moveq   #'$',d0
+        bsr     putc
         move.l  a3,d0
         bsr     puthexl
         moveq   #0,d6           ; pass count (0 -> 1)
@@ -315,7 +319,7 @@ reloc_go:
 ; test shows RUN, replaced by PASS or FAIL nn (cumulative count).
 suite_scr:
         movem.l d4-d6/a1,-(sp)
-        movea.l #SCREEN+4*1024,a0 ; clear list rows 4-8
+        movea.l #SCREEN+6*1024,a0 ; clear list rows 6-10
         move.w  #1279,d0
 .cl:    clr.l   (a0)+
         dbra    d0,.cl
@@ -324,7 +328,7 @@ suite_scr:
 .next:  move.w  (a1)+,d5
         beq     .fin
         move.l  d4,28(a4)
-        moveq   #3,d0           ; row = 3 + test number
+        moveq   #5,d0           ; row = 5 + test number (blank row above)
         add.w   d4,d0
         bsr     scr_at
         lea     42(a5),a5       ; centre the list block
@@ -1217,7 +1221,7 @@ n5:     dc.b    'PATTERN',0
 dbltab: dc.b    $00,$03,$0C,$0F,$30,$33,$3C,$3F ; nibble -> doubled bits
         dc.b    $C0,$C3,$CC,$CF,$F0,$F3,$FC,$FF
 
-charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U',0
+charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U$',0
 
 glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $00,$00,$00,$00,$00,$00,$00,$00 ; space
@@ -1256,6 +1260,7 @@ glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $66,$66,$66,$7E,$66,$66,$66,$00 ; H
         dc.b    $06,$06,$0C,$18,$30,$60,$60,$00 ; /
         dc.b    $66,$66,$66,$66,$66,$66,$3C,$00 ; U
+        dc.b    $18,$3E,$60,$3C,$06,$7C,$18,$00 ; $
 
         even
 code_end:
