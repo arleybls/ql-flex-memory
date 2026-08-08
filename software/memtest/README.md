@@ -2,30 +2,37 @@
 
 (C) 2026 Arley Silveira — CERN-OHL-S v2.
 
-A memory test for validating a freshly built (or suspect) QL Flex card on a
-real Sinclair QL. A SuperBASIC front-end (`memtest_bas`) drives a 68008
-machine-code core (`memtest_bin`, source in `memtest_asm`) that runs five
-tests over the card's memory:
+## What it is
 
-1. **Data bus** — walking 1s/0s at one location per 64K block (byte-wide;
-   the 68008 bus is 8 bits).
-2. **Address bus** — power-of-2 offset probes; catches stuck or shorted
-   address lines between the edge connector, GAL and SRAM.
-3. **Aliasing** — a unique tag at the start of every 4K page, then verified.
-   This is the test that catches a mis-programmed GAL, a wrong jumper
-   setting or two stacked cards decoding the same window: two pages end up
-   in the same RAM and the tags collide.
-4. **March C−** — full-range march for stuck-at, transition and coupling
-   faults.
-5. **Checkerboard** — `$55/$AA` fill, ~2 s retention delay, verify, then the
-   inverted pattern.
+A memory tester for validating a freshly built (or suspect) QL Flex card
+on the QL itself — the software half of the board's bring-up procedure.
+It consists of a SuperBASIC front-end (`memtest_bas`: splash screen,
+menu, configuration checks, results) and a position-independent 68008
+machine-code core (`memtest_bin`, source in `memtest_asm`) that runs the
+actual test loops at full machine speed with a live progress overlay.
 
-All five tests always run (a failure doesn't stop the suite), so one
-session reports every problem: the results screen shows a per-test
-OK/FAIL matrix with cumulative fail counts across passes, the first
-failing address with expected/read bytes, and — since the board has a
-single 8-bit SRAM — a direct diagnosis of which data line(s) D0–D7 are
-stuck, or a GAL/address-decode hint for address-type failures.
+It is built as a diagnostic instrument, not just a pass/fail checker:
+all five tests always run (a failure doesn't stop the suite), so one
+session reports every problem at once. The results screen shows a
+per-test OK/FAIL matrix with cumulative fail counts across passes, the
+first failing address with expected/read bytes, and — since the board
+has a single 8-bit SRAM — a direct diagnosis of which data line(s)
+D0–D7 are stuck, or a GAL/address-decode hint for address-type
+failures. Multi-pass soak runs keep intermittent faults visible
+(`FAIL x2` after two bad passes out of ten).
+
+## The five tests (reference)
+
+All tests are byte-wide — the 68008 has an 8-bit external data bus, so
+wider accesses would only re-exercise the same lines.
+
+| # | Test | Method | What a failure means |
+|---|------|--------|----------------------|
+| 1 | **DATA BUS** | Walking 1s and 0s (16 patterns) at one location per 64K block | A data line D0–D7 stuck, shorted or unsoldered between the SRAM, GAL and edge connector. The report names the exact line(s). |
+| 2 | **ADDR BUS** | Power-of-2 offset probes: `$AA` everywhere, then a `$55` "aggressor" at each single-address-line offset while every other probe cell is verified | An address line A0–A18 stuck or shorted — writes land at the wrong address. Points at connector/GAL/SRAM address routing. |
+| 3 | **ALIAS** | A unique tag byte at the start of every 4K page across the window, then all pages re-verified (twice, second pass inverted) | Two addresses decode to the same RAM cell: a mis-programmed GAL, wrong jumper setting, or two stacked cards claiming the same window. The report shows which page was overwritten by which. |
+| 4 | **MARCH C−** | The classic six-element march: ascending `w0; r0,w1; r1,w0`, descending `r0,w1; r1,w0; r0` over the whole range | Cell-level faults the simple tests miss: stuck-at cells, transition faults, coupling between adjacent cells. |
+| 5 | **PATTERN** | `$55/$AA` checkerboard fill, ~2 s retention delay, verify; repeated with the inverted pattern | Neighbouring-cell shorts and weak or leaky cells that lose data over time; marginal timing. The delay can be skipped for emulator runs. |
 
 ## The three test modes
 
@@ -37,6 +44,57 @@ stuck, or a GAL/address-decode hint for address-type failures.
 
 Option 1 first: pick the jumper configuration, and the program checks that
 the RAM top QDOS detected at boot matches what the GAL should decode.
+
+## Usage
+
+### Files
+
+| File | What it is | Copy to the QL? |
+|------|-----------|-----------------|
+| `memtest_bas` | SuperBASIC front-end (plain text program) | **Yes** |
+| `memtest_bin` | Assembled 68008 test core, loaded by the front-end | **Yes** |
+| `memtest_asm` | Source of the core — only needed to rebuild | No |
+| `build.ps1` | Windows build script (vasm) | No |
+| `checkbin_bas` | Tiny diagnostic that checks what `memtest_bin` loads as | Optional |
+
+Both files are ordinary data files (nothing is `EXEC`ed, no executable
+header), so any transfer method works — see "Getting the files onto a
+real QL" below.
+
+### Running it
+
+Put `memtest_bas` and `memtest_bin` together on any device the QL can
+read (`flp1_`, `mdv1_`, `win1_`, …), then from a **fresh boot** type:
+
+    LRUN flp1_memtest_bas
+
+(replace `flp1_` with the device you copied them to).
+
+1. **Splash** shows for ~3 s (any key skips it), then the menu appears.
+   The program locates `memtest_bin` by itself, probing
+   flp1/mdv1/win1/flp2/mdv2/ram1 with a QDOS `IO.OPEN` helper; it only
+   asks for a device if none has the file.
+2. **The menu header** shows the RAM top QDOS found at boot and the
+   expansion size derived from it — the first thing to sanity-check.
+3. **Option 1** — tell the program the card's JP1/JP2 jumper setting and
+   NORMAL/TRUMP position. It predicts the memory window and compares it
+   against what QDOS actually found (see the table below).
+4. **Options 2/3/4** run the tests (see the modes table above). Each asks
+   for a pass count (1–99; more passes = soak test for intermittent
+   faults) and whether to skip the retention delay (say `y` only in
+   emulators). An estimated duration is shown, then a centred overlay
+   panel tracks progress: `PASS n/N`, the running test's name, and a bar
+   that fills once per pass.
+5. **Results**: after `TESTS FINISHED — PRESS ENTER`, the screen clears
+   and shows the verdict (green `ALL TESTS PASSED` / red `FAULTS
+   FOUND`), passes completed, the per-test OK/FAIL×n matrix, and for
+   failures the first fault's address, expected/read bytes and the
+   data-line or address-decode diagnosis.
+6. **The destructive test** additionally asks you to type `YES` and
+   flashes a warning; it then owns the machine — test list with live
+   `RUN` marker, progress panel, green/red verdict banner, ending in
+   `DONE - RESET QL`. Reset or power-cycle afterwards. Expect roughly a
+   minute per pass for a 512K window at real QL speed.
 
 ## Expected results per jumper configuration
 
@@ -67,20 +125,12 @@ no longer responds.
 * Reads outside a decoded window return floating-bus garbage on a QL; the
   tests only ever assert on addresses inside the window under test.
 
-## Running it
+## Fresh boots and RESPR
 
-Copy `memtest_bas` and `memtest_bin` onto any QL device (they are plain
-data files — nothing is `EXEC`ed), then from a **fresh boot**:
-
-    LRUN flp1_memtest_bas
-
-(or `mdv1_`, `win1_`, …). After a splash screen the menu appears; the
-program finds `memtest_bin` by itself, probing flp1/mdv1/win1/flp2/
-mdv2/ram1 with a QDOS `IO.OPEN` helper and only asking if none has it.
-A fresh boot matters because the loader uses `RESPR`,
-which fails with "not complete" on stock ROMs once any job has been
-started. The stock QL has no way to free `RESPR` memory, so repeated safe
-tests reuse the first buffer.
+A fresh boot matters because the loader uses `RESPR`, which fails with
+"not complete" on stock ROMs once any job has been started. The stock QL
+has no way to free `RESPR` memory, so repeated safe tests reuse the
+first buffer.
 
 **Reboot between sessions.** Every `LRUN` and every safe-test buffer
 permanently consumes `RESPR` memory until the next reboot, and Minerva
@@ -91,11 +141,6 @@ range below `$20000` and the front-end refuses a buffer below the free
 area, telling you to reboot), but the habit to build is: one boot, one
 test session.
 
-The destructive test asks you to type `YES`, then owns the machine: each
-test reports `PASS`/`FAIL` on screen, ending with `ALL TESTS PASS` or the
-failing address, and `DONE - RESET QL`. Expect roughly a minute per pass
-for a 512K window (March C− is the slow part).
-
 ### Emulators (sQLux / QPC2)
 
 Program-logic validation only — an emulator can't reproduce GAL or solder
@@ -104,10 +149,11 @@ test.
 
 **sQLux** — in `sqlux.ini`:
 
-    RAMTOP = 640
+    RAMTOP = 768
     DEVICE = FLP1,C:\path\to\ql-flex-memory\software\memtest\,qdos-like
 
-`RAMTOP = 640` simulates a 512K card (128K base + 512K → RAM top `$C0000`);
+`RAMTOP = 768` simulates a 512K card (RAMTOP is the top *address* in K:
+128K base ends at 256K, plus 512K expansion → RAM top `$C0000` = 768K);
 the size check for config 1 must then PASS, and safe/destructive tests must
 run clean. The destructive test works in sQLux (it emulates the real screen
 at `$20000`).
