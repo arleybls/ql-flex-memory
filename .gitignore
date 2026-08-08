@@ -30,3 +30,6 @@ fp-info-cache
 # Exported BOM files
 *.xml
 *.csv
+
+# memtest build artifacts
+software/memtest/memtest_lst

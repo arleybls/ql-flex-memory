@@ -1,0 +1,1048 @@
+; =====================================================================
+; QL Flex Memory Expansion - RAM test core
+; 68008 machine code, position independent. Assemble with vasm:
+;   vasmm68k_mot -Fbin -m68008 -no-opt -o memtest_bin memtest_asm
+; Loaded from SuperBASIC (memtest_bas) with LBYTES, driven with CALL.
+;
+; Entry points (offsets are fixed - do not reorder the header):
+;   base+0  safe test    CALL base,mode,start,end,flags,result
+;   base+4  destructive  CALL base+4,start,end,flags
+;   base+8  long 'QFMT' magic, base+12 word version
+;   base+16 system info  CALL base+16,result
+;           stores the system-variables base (from MT.INF) as a long at
+;           'result'. $28000 on a standard QL; Minerva moves it to
+;           $30000 in dual-screen mode, and SMSQ/E puts it elsewhere -
+;           the BASIC front-end uses this to adapt/refuse.
+;
+; CALL parameters arrive in D1,D2,D3,... (SuperBASIC convention).
+;   mode   : 0 = QDOS-safe buffer test, 1 = unmanaged window test
+;   start  : first address of the range under test
+;   end    : end of range (exclusive)
+;   flags  : bits 0-7 = number of passes (0 -> 1)
+;            bit 8    = skip retention delay (for emulator runs)
+;   result : address of 64-byte result block (must be even)
+;
+; Result block layout (all longs):
+;   +0  fail bitmap, bit n-1 set = test n failed (0 = all passed)
+;   +4  first failing address
+;   +8  expected byte
+;   +12 actual byte
+;   +16 failing test number (1-5, 0 = none)
+;   +20 passes completed
+;   +24 bytes tested
+;   +28 test currently running (1-5)
+;   +32 done flag (1 = run finished)
+;   +36 INPUT: screen address for a progress bar (0/invalid = no bar).
+;       Must point into the MODE 4 frame buffer ($20000-$27F00); the
+;       bar is 512px wide and 2 pixel rows tall, redrawn per test.
+;
+; Tests: 1 data bus (walking 1/0)    2 address bus (power-of-2 offsets)
+;        3 aliasing (4K page tags)   4 March C-
+;        5 checkerboard + retention delay
+; All tests are byte-wide: the 68008 has an 8-bit external data bus.
+;
+; The destructive entry enters supervisor mode, masks interrupts,
+; relocates itself to $30000 (base 128K RAM, outside any expansion
+; window) so the whole window can be tested, reports directly on the
+; MODE 4 screen at $20000 and never returns - reset the QL afterwards.
+; =====================================================================
+
+VERSION   equ     3
+ERR_IPAR  equ     -15           ; QDOS 'bad parameter'
+RELOC     equ     $30000        ; destructive-mode copy target
+DSTACK    equ     $38000        ; destructive-mode supervisor stack
+DRESULT   equ     $28480        ; destructive-mode result block
+SCREEN    equ     $20000        ; MODE 4 frame buffer
+CODELEN   equ     code_end-__start
+
+__start:
+        bra.w   safe_entry      ; +0
+        bra.w   destr_entry     ; +4
+        dc.b    'QFMT'          ; +8  magic
+        dc.w    VERSION         ; +12
+        dc.w    0               ; +14 pad
+        bra.w   info_entry      ; +16
+
+; ---------------------------------------------------------------------
+; Info entry: D1 = address to store the system-variables base (long),
+; obtained from the OS with MT.INF (TRAP #1, D0=0, returns A0).
+; ---------------------------------------------------------------------
+info_entry:
+        movem.l d1-d2/a0-a1,-(sp)
+        tst.l   d1
+        beq     .bad
+        btst    #0,d1
+        bne     .bad
+        movea.l d1,a1
+        moveq   #0,d0           ; MT.INF
+        trap    #1
+        move.l  a0,(a1)
+        movem.l (sp)+,d1-d2/a0-a1
+        moveq   #0,d0
+        rts
+.bad:   movem.l (sp)+,d1-d2/a0-a1
+        moveq   #ERR_IPAR,d0
+        rts
+
+; ---------------------------------------------------------------------
+; Safe entry: runs the suite over [D2,D3) without touching anything
+; else. Returns D0=0 (results in the block) or ERR_IPAR on bad params.
+; ---------------------------------------------------------------------
+safe_entry:
+        movem.l d1-d7/a0-a6,-(sp)
+        cmpi.l  #2,d1           ; mode 0/1 only
+        bhs     .bad
+        cmpi.l  #$20000,d2      ; below the screen is ROM/IO, never RAM
+        blo     .bad            ; (catches RESPR wrapping down to 0)
+        cmp.l   d2,d3           ; end must be > start
+        bls     .bad
+        tst.l   d5              ; result block required
+        beq     .bad
+        btst    #0,d5           ; and even
+        bne     .bad
+        movea.l d2,a2           ; a2 = start
+        movea.l d3,a3           ; a3 = end
+        movea.l d5,a4           ; a4 = result block
+        move.l  d4,d7           ; d7 = flags
+        bsr     clr_result
+        clr.l   40(a4)          ; panel not drawn yet
+        moveq   #0,d6           ; d6 = pass count (0 -> 1)
+        move.b  d7,d6
+        bne     .ploop
+        moveq   #1,d6
+.ploop: bsr     run_suite
+        tst.l   d0
+        bne     .done
+        addq.l  #1,20(a4)
+        subq.w  #1,d6
+        bne     .ploop
+.done:  moveq   #0,d0           ; overlay: TESTS FINISHED / PRESS ENTER
+        bsr     prog_done
+        clr.l   28(a4)
+        move.l  #1,32(a4)
+        movem.l (sp)+,d1-d7/a0-a6
+        moveq   #0,d0
+        rts
+.bad:   movem.l (sp)+,d1-d7/a0-a6
+        moveq   #ERR_IPAR,d0
+        rts
+
+; clear result block (a4), record window size; +36 (bar address) and
+; beyond are left untouched - +36 is an input from the caller
+clr_result:
+        movem.l d0/a0,-(sp)
+        movea.l a4,a0
+        moveq   #8,d0
+.c:     clr.l   (a0)+
+        dbra    d0,.c
+        move.l  a3,d0
+        sub.l   a2,d0
+        move.l  d0,24(a4)
+        movem.l (sp)+,d0/a0
+        rts
+
+; ---------------------------------------------------------------------
+; run_suite: run tests 1..5 over a2/a3, stop at first failing test.
+; In:  a2 start, a3 end, a4 result block, d7 flags
+; Out: d0 = 0 all passed, 1 = a test failed (details recorded)
+; ---------------------------------------------------------------------
+run_suite:
+        movem.l d4-d6/a1,-(sp)
+        moveq   #1,d4           ; test number
+        lea     ttab(pc),a1
+.next:  move.w  (a1)+,d5
+        beq     .pass
+        move.l  d4,28(a4)
+        lea     ttab(pc),a0
+        adda.w  d5,a0
+        movem.l d4/a1,-(sp)
+        jsr     (a0)
+        movem.l (sp)+,d4/a1
+        tst.l   d0
+        bne     .fail
+        moveq   #1,d0           ; test finished: bar to test/5 exactly
+        moveq   #1,d1
+        bsr     prog_frac
+        addq.w  #1,d4
+        bra     .next
+.fail:  bsr     record_fail
+        moveq   #1,d0
+        bra     .out
+.pass:  moveq   #0,d0
+.out:   movem.l (sp)+,d4-d6/a1
+        rts
+
+; record a failure: d1=addr d2=expected d3=actual d4=test number
+; (only the first failure's details are kept; bitmap always updated)
+record_fail:
+        movem.l d0/d5,-(sp)
+        tst.l   16(a4)
+        bne     .bit
+        move.l  d1,4(a4)
+        move.l  d2,8(a4)
+        move.l  d3,12(a4)
+        move.l  d4,16(a4)
+.bit:   moveq   #1,d0
+        move.w  d4,d5
+        subq.w  #1,d5
+        lsl.l   d5,d0
+        or.l    d0,(a4)
+        movem.l (sp)+,d0/d5
+        rts
+
+; ---------------------------------------------------------------------
+; Destructive entry: D1=start D2=end D3=flags. Never returns.
+; ---------------------------------------------------------------------
+destr_entry:
+        cmpi.l  #$40000,d1      ; window must lie in expansion space
+        blo     .bad
+        cmp.l   d1,d2           ; end must be > start
+        bls     .bad
+        trap    #0              ; supervisor mode (QDOS)
+        move.w  #$2700,sr       ; interrupts off
+        lea     __start(pc),a0  ; copy ourselves to RELOC
+        movea.l #RELOC,a1
+        move.l  #CODELEN,d0
+.cp:    move.b  (a0)+,(a1)+
+        subq.l  #1,d0
+        bne     .cp
+        movea.l #RELOC+(reloc_go-__start),a0
+        jmp     (a0)            ; continue in the relocated copy
+.bad:   moveq   #ERR_IPAR,d0
+        rts
+
+reloc_go:
+        movea.l #DSTACK,sp
+        movea.l d1,a2           ; a2 = window start
+        movea.l d2,a3           ; a3 = window end
+        move.l  d3,d7           ; d7 = flags
+        movea.l #DRESULT,a4
+        bsr     clr_result
+        clr.l   40(a4)          ; panel not drawn yet
+        move.l  #SCREEN,36(a4)  ; enable the progress overlay
+        movea.l #SCREEN,a0      ; clear the screen
+        move.w  #8191,d0
+.cs:    clr.l   (a0)+
+        dbra    d0,.cs
+        moveq   #0,d0
+        bsr     scr_at
+        lea     s_title(pc),a0
+        bsr     puts
+        moveq   #2,d0
+        bsr     scr_at
+        lea     s_window(pc),a0
+        bsr     puts
+        move.l  a2,d0
+        bsr     puthexl
+        lea     s_dash(pc),a0
+        bsr     puts
+        move.l  a3,d0
+        bsr     puthexl
+        moveq   #0,d6           ; pass count (0 -> 1)
+        move.b  d7,d6
+        bne     .ploop
+        moveq   #1,d6
+.ploop: bsr     suite_scr
+        tst.l   d0
+        bne     .failed
+        addq.l  #1,20(a4)
+        subq.w  #1,d6
+        bne     .ploop
+        moveq   #21,d0
+        bsr     scr_at
+        lea     s_allpass(pc),a0
+        bsr     puts
+        bra     .halt
+.failed:
+        moveq   #20,d0
+        bsr     scr_at
+        lea     s_failat(pc),a0
+        bsr     puts
+        move.l  4(a4),d0
+        bsr     puthexl
+        lea     s_exp(pc),a0
+        bsr     puts
+        move.l  8(a4),d0
+        bsr     puthexb
+        lea     s_act(pc),a0
+        bsr     puts
+        move.l  12(a4),d0
+        bsr     puthexb
+        moveq   #21,d0
+        bsr     scr_at
+        lea     s_failed(pc),a0
+        bsr     puts
+.halt:  move.l  #1,32(a4)
+        moveq   #1,d0           ; overlay: TESTS FINISHED (no enter wait)
+        bsr     prog_done
+        moveq   #22,d0
+        bsr     scr_at
+        lea     s_done(pc),a0
+        bsr     puts
+.stop:  bra     .stop
+
+; run_suite with on-screen progress, one row per test
+suite_scr:
+        movem.l d4-d6/a1,-(sp)
+        moveq   #1,d4
+        lea     ttab(pc),a1
+.next:  move.w  (a1)+,d5
+        beq     .pass
+        move.l  d4,28(a4)
+        moveq   #3,d0           ; row = 3 + test number
+        add.w   d4,d0
+        bsr     scr_at
+        lea     s_test(pc),a0
+        bsr     puts
+        move.b  #'0',d0
+        add.b   d4,d0
+        bsr     putc
+        lea     s_colon(pc),a0
+        bsr     puts
+        lea     ttab(pc),a0
+        adda.w  d5,a0
+        movem.l d4/a1,-(sp)
+        jsr     (a0)
+        movem.l (sp)+,d4/a1
+        tst.l   d0
+        bne     .fail
+        lea     s_pass(pc),a0
+        bsr     puts
+        moveq   #1,d0           ; test finished: bar to test/5 exactly
+        moveq   #1,d1
+        bsr     prog_frac
+        addq.w  #1,d4
+        bra     .next
+.fail:  lea     s_fail(pc),a0
+        bsr     puts
+        bsr     record_fail
+        moveq   #1,d0
+        bra     .out
+.pass:  moveq   #0,d0
+.out:   movem.l (sp)+,d4-d6/a1
+        rts
+
+; ---------------------------------------------------------------------
+; Test 1: data bus - walking 1s and 0s at one location per 64K block.
+; All tests: in a2=start a3=end; out d0=0 pass, d0=1 fail with
+; d1=address d2=expected d3=actual. Preserve a2-a4/d7.
+; ---------------------------------------------------------------------
+t_databus:
+        movem.l d4-d6/a0,-(sp)
+        movea.l a2,a0
+.blk:   bsr     prog_addr
+        moveq   #0,d4           ; walking 1
+.w1:    moveq   #1,d5
+        lsl.b   d4,d5
+        move.b  d5,(a0)
+        move.b  (a0),d6
+        cmp.b   d5,d6
+        bne     .fail
+        addq.w  #1,d4
+        cmpi.w  #8,d4
+        blo     .w1
+        moveq   #0,d4           ; walking 0
+.w0:    moveq   #1,d5
+        lsl.b   d4,d5
+        not.b   d5
+        move.b  d5,(a0)
+        move.b  (a0),d6
+        cmp.b   d5,d6
+        bne     .fail
+        addq.w  #1,d4
+        cmpi.w  #8,d4
+        blo     .w0
+        adda.l  #$10000,a0
+        cmpa.l  a3,a0
+        blo     .blk
+        moveq   #0,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+.fail:  move.l  a0,d1
+        moveq   #0,d2
+        move.b  d5,d2
+        moveq   #0,d3
+        move.b  d6,d3
+        moveq   #1,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+
+; ---------------------------------------------------------------------
+; Test 2: address bus - power-of-2 offset probes (Barr's algorithm).
+; ---------------------------------------------------------------------
+t_addrbus:
+        movem.l d4-d6/a0-a1,-(sp)
+        move.l  a3,d4
+        sub.l   a2,d4           ; d4 = window length
+        cmpi.l  #2,d4
+        blo     .skip
+        move.b  #$AA,(a2)       ; fill base + power-of-2 offsets
+        moveq   #1,d5
+.f:     cmp.l   d4,d5
+        bhs     .fdone
+        movea.l a2,a0
+        adda.l  d5,a0
+        move.b  #$AA,(a0)
+        add.l   d5,d5
+        bra     .f
+.fdone: move.b  #$55,(a2)       ; stuck-high check
+        moveq   #1,d5
+.s:     cmp.l   d4,d5
+        bhs     .sdone
+        movea.l a2,a0
+        adda.l  d5,a0
+        move.b  (a0),d6
+        cmpi.b  #$AA,d6
+        bne     .fail
+        add.l   d5,d5
+        bra     .s
+.sdone: move.b  #$AA,(a2)
+        moveq   #1,d5           ; shorted-lines check
+.t:     cmp.l   d4,d5
+        bhs     .ok
+        movea.l a2,a0
+        adda.l  d5,a0
+        bsr     prog_addr
+        move.b  #$55,(a0)
+        move.b  (a2),d6
+        cmpi.b  #$AA,d6
+        bne     .failb
+        moveq   #1,d6
+.ti:    cmp.l   d4,d6
+        bhs     .tnext
+        cmp.l   d5,d6
+        beq     .tskip
+        movea.l a2,a1
+        adda.l  d6,a1
+        move.b  (a1),d0
+        cmpi.b  #$AA,d0
+        bne     .failo
+.tskip: add.l   d6,d6
+        bra     .ti
+.tnext: movea.l a2,a0
+        adda.l  d5,a0
+        move.b  #$AA,(a0)
+        add.l   d5,d5
+        bra     .t
+.ok:
+.skip:  moveq   #0,d0
+        movem.l (sp)+,d4-d6/a0-a1
+        rts
+.fail:  move.l  a0,d1
+        moveq   #0,d3
+        move.b  d6,d3
+        bra     .rep
+.failb: move.l  a2,d1
+        moveq   #0,d3
+        move.b  d6,d3
+        bra     .rep
+.failo: move.l  a1,d1
+        moveq   #0,d3
+        move.b  d0,d3
+.rep:   move.l  #$AA,d2
+        moveq   #1,d0
+        movem.l (sp)+,d4-d6/a0-a1
+        rts
+
+; ---------------------------------------------------------------------
+; Test 3: aliasing - unique tag at the start of every 4K page, then
+; verify. A GAL decode fault or stacked-card overlap maps two pages
+; onto the same RAM, so the later tag overwrites the earlier one.
+; ---------------------------------------------------------------------
+t_alias:
+        movem.l d4-d6/a0,-(sp)
+        move.l  a3,d4
+        sub.l   a2,d4
+        cmpi.l  #$2000,d4       ; need at least two pages
+        blo     .skip
+        movea.l a2,a0           ; pass 1: tag = page index
+        moveq   #0,d5
+.w1:    bsr     prog_addr
+        move.b  d5,(a0)
+        addq.b  #1,d5
+        adda.l  #$1000,a0
+        cmpa.l  a3,a0
+        blo     .w1
+        movea.l a2,a0
+        moveq   #0,d5
+.v1:    bsr     prog_addr
+        move.b  (a0),d6
+        cmp.b   d5,d6
+        bne     .fail
+        addq.b  #1,d5
+        adda.l  #$1000,a0
+        cmpa.l  a3,a0
+        blo     .v1
+        movea.l a2,a0           ; pass 2: tag = ~page index
+        moveq   #0,d5
+.w2:    bsr     prog_addr
+        move.b  d5,d6
+        not.b   d6
+        move.b  d6,(a0)
+        addq.b  #1,d5
+        adda.l  #$1000,a0
+        cmpa.l  a3,a0
+        blo     .w2
+        movea.l a2,a0
+        moveq   #0,d5
+.v2:    bsr     prog_addr
+        move.b  d5,d6
+        not.b   d6
+        move.b  (a0),d0
+        cmp.b   d6,d0
+        bne     .fail2
+        addq.b  #1,d5
+        adda.l  #$1000,a0
+        cmpa.l  a3,a0
+        blo     .v2
+.skip:  moveq   #0,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+.fail:  move.l  a0,d1
+        moveq   #0,d2
+        move.b  d5,d2
+        moveq   #0,d3
+        move.b  d6,d3
+        moveq   #1,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+.fail2: move.l  a0,d1
+        moveq   #0,d2
+        move.b  d6,d2
+        moveq   #0,d3
+        move.b  d0,d3
+        moveq   #1,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+
+; ---------------------------------------------------------------------
+; Test 4: March C-  (w0; r0,w1; r1,w0 ascending; r0,w1; r1,w0; r0
+; descending) - stuck-at, transition and coupling faults.
+; ---------------------------------------------------------------------
+t_marchc:
+        movem.l d6/a0,-(sp)
+        moveq   #0,d0
+        bsr     .pr6
+        movea.l a2,a0           ; up: w0
+.e1:    clr.b   (a0)+
+        cmpa.l  a3,a0
+        blo     .e1
+        moveq   #1,d0
+        bsr     .pr6
+        movea.l a2,a0           ; up: r0,w1
+.e2:    move.b  (a0),d6
+        bne     .fail0
+        move.b  #$FF,(a0)+
+        cmpa.l  a3,a0
+        blo     .e2
+        moveq   #2,d0
+        bsr     .pr6
+        movea.l a2,a0           ; up: r1,w0
+.e3:    move.b  (a0),d6
+        cmpi.b  #$FF,d6
+        bne     .fail1
+        clr.b   (a0)+
+        cmpa.l  a3,a0
+        blo     .e3
+        moveq   #3,d0
+        bsr     .pr6
+        movea.l a3,a0           ; down: r0,w1
+.e4:    move.b  -(a0),d6
+        bne     .fail0
+        move.b  #$FF,(a0)
+        cmpa.l  a2,a0
+        bhi     .e4
+        moveq   #4,d0
+        bsr     .pr6
+        movea.l a3,a0           ; down: r1,w0
+.e5:    move.b  -(a0),d6
+        cmpi.b  #$FF,d6
+        bne     .fail1
+        clr.b   (a0)
+        cmpa.l  a2,a0
+        bhi     .e5
+        moveq   #5,d0
+        bsr     .pr6
+        movea.l a3,a0           ; down: r0
+.e6:    move.b  -(a0),d6
+        bne     .fail0
+        cmpa.l  a2,a0
+        bhi     .e6
+        moveq   #6,d0
+        bsr     .pr6
+        moveq   #0,d0
+        movem.l (sp)+,d6/a0
+        rts
+.pr6:   moveq   #6,d1
+        bra     prog_frac       ; tail call
+.fail0: moveq   #0,d2
+        bra     .fx
+.fail1: move.l  #$FF,d2
+.fx:    move.l  a0,d1
+        moveq   #0,d3
+        move.b  d6,d3
+        moveq   #1,d0
+        movem.l (sp)+,d6/a0
+        rts
+
+; ---------------------------------------------------------------------
+; Test 5: checkerboard $55/$AA, ~2s retention delay, verify; then the
+; inverted pattern. Flag bit 8 skips the delays (emulator runs).
+; ---------------------------------------------------------------------
+t_checker:
+        movem.l d4-d6/a0,-(sp)
+        moveq   #0,d4           ; phase 0: $55 first, phase 1: $AA first
+.phase: move.b  #$55,d5
+        tst.w   d4
+        beq     .fill
+        move.b  #$AA,d5
+.fill:  moveq   #0,d0
+        move.w  d4,d0
+        add.l   d0,d0
+        moveq   #4,d1
+        bsr     prog_frac
+        movea.l a2,a0
+        move.b  d5,d6
+.f1:    move.b  d6,(a0)+
+        not.b   d6
+        cmpa.l  a3,a0
+        blo     .f1
+        bsr     delay2s
+        moveq   #0,d0
+        move.w  d4,d0
+        add.l   d0,d0
+        addq.l  #1,d0
+        moveq   #4,d1
+        bsr     prog_frac
+        movea.l a2,a0
+        move.b  d5,d6
+.v1:    move.b  (a0),d0
+        cmp.b   d6,d0
+        bne     .fail
+        addq.l  #1,a0
+        not.b   d6
+        cmpa.l  a3,a0
+        blo     .v1
+        addq.w  #1,d4
+        cmpi.w  #2,d4
+        blo     .phase
+        moveq   #1,d0
+        moveq   #1,d1
+        bsr     prog_frac
+        moveq   #0,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+.fail:  move.l  a0,d1
+        moveq   #0,d2
+        move.b  d6,d2
+        moveq   #0,d3
+        move.b  d0,d3
+        moveq   #1,d0
+        movem.l (sp)+,d4-d6/a0
+        rts
+
+; ~2 seconds busy loop on a 7.5MHz 68008; skipped when flag bit 8 set
+delay2s:
+        btst    #8,d7
+        bne     .skip
+        movem.l d0-d1,-(sp)
+        moveq   #11,d0
+.o:     move.w  #$FFFF,d1
+.i:     dbra    d1,.i
+        dbra    d0,.o
+        movem.l (sp)+,d0-d1
+.skip:  rts
+
+; ---------------------------------------------------------------------
+; Minimal MODE 4 screen output (destructive mode only).
+; a5 = cursor (screen address of next character cell).
+; ---------------------------------------------------------------------
+scr_at:                         ; d0.w = text row 0-31
+        movem.l d0,-(sp)
+        andi.l  #31,d0
+        lsl.l   #8,d0
+        lsl.l   #2,d0           ; row * 1024 (8 lines of 128 bytes)
+        addi.l  #SCREEN+4,d0    ; two-character left margin
+        movea.l d0,a5
+        movem.l (sp)+,d0
+        rts
+
+puts:                           ; a0 = zero-terminated string
+        movem.l d0/a0,-(sp)
+.l:     move.b  (a0)+,d0
+        beq     .e
+        bsr     putc
+        bra     .l
+.e:     movem.l (sp)+,d0/a0
+        rts
+
+putc:                           ; d0.b = character (see charmap)
+        movem.l d0-d2/a0-a1,-(sp)
+        lea     charmap(pc),a0
+        moveq   #0,d1
+.f:     move.b  (a0)+,d2
+        beq     .nf
+        cmp.b   d0,d2
+        beq     .got
+        addq.w  #1,d1
+        bra     .f
+.nf:    moveq   #0,d1           ; unknown -> space (index 0)
+.got:   lea     glyphs(pc),a0
+        lsl.w   #3,d1
+        adda.w  d1,a0
+        movea.l a5,a1
+        moveq   #7,d2
+.dr:    move.b  (a0),(a1)       ; green plane
+        move.b  (a0)+,1(a1)     ; red plane -> white pixels
+        lea     128(a1),a1
+        dbra    d2,.dr
+        addq.l  #2,a5
+        movem.l (sp)+,d0-d2/a0-a1
+        rts
+
+puthexl:                        ; d0.l as 8 hex digits
+        movem.l d0-d2,-(sp)
+        moveq   #7,d2
+.n:     rol.l   #4,d0
+        move.b  d0,d1
+        andi.b  #$0F,d1
+        cmpi.b  #10,d1
+        blo     .dig
+        addi.b  #'A'-10,d1
+        bra     .p
+.dig:   addi.b  #'0',d1
+.p:     move.l  d0,-(sp)
+        move.b  d1,d0
+        bsr     putc
+        move.l  (sp)+,d0
+        dbra    d2,.n
+        movem.l (sp)+,d0-d2
+        rts
+
+puthexb:                        ; d0.b as 2 hex digits
+        movem.l d0-d2,-(sp)
+        move.b  d0,d2
+        lsr.b   #4,d0
+        bsr     .nib
+        move.b  d2,d0
+        bsr     .nib
+        movem.l (sp)+,d0-d2
+        rts
+.nib:   andi.b  #$0F,d0
+        cmpi.b  #10,d0
+        blo     .d
+        addi.b  #'A'-10,d0
+        bra     .pp
+.d:     addi.b  #'0',d0
+.pp:    bra     putc            ; tail call
+
+; ---------------------------------------------------------------------
+; Progress overlay: a bordered panel centred on the screen showing
+;    PASS n
+;    TEST n <name>
+;    [########..........]
+; Enabled when 36(a4) holds any address inside the frame buffer (the
+; value is only an enable; the panel position is fixed). 40(a4) is the
+; internal "panel drawn" flag, reset at the start of every run.
+; prog_frac: d0 = numerator, d1 = denominator of the current test's
+; local progress; the current test (28(a4)) is folded in so the bar
+; sweeps once per pass. All registers preserved.
+; ---------------------------------------------------------------------
+PROW    equ     13                      ; panel top text row (of 7)
+PBASE   equ     SCREEN+PROW*1024
+PXOFF   equ     16                      ; panel left edge (bytes)
+
+prog_frac:
+        movem.l d0-d5/a0-a1/a5,-(sp)
+        move.l  36(a4),d2
+        cmpi.l  #SCREEN,d2
+        blo     .out
+        cmpi.l  #SCREEN+$7C00,d2
+        bhi     .out
+        tst.l   d1
+        beq     .out
+        cmp.l   d1,d0           ; clamp numerator
+        bls     .cl
+        move.l  d1,d0
+.cl:    move.l  28(a4),d3       ; one bar per pass: fold in test number,
+        subq.l  #1,d3           ; overall = (test-1 + local)/5
+        bpl     .t0
+        moveq   #0,d3
+.t0:    cmpi.l  #4,d3
+        bls     .t1
+        moveq   #4,d3
+.t1:    mulu    d1,d3
+        add.l   d3,d0
+        move.l  d1,d3
+        lsl.l   #2,d1
+        add.l   d3,d1
+        move.l  d0,d3           ; filled pairs = 40*num/den
+        lsl.l   #5,d0
+        lsl.l   #3,d3
+        add.l   d3,d0
+        divu    d1,d0
+        move.w  d0,d5           ; d5 = filled pairs (0..40)
+        bsr     pinit
+        ; --- bar row (panel row 4): [ 40 pairs ]  at byte 22 ---
+        movea.l #PBASE+4096+PXOFF+6,a5
+        moveq   #'[',d0
+        bsr     putc
+        movea.l a5,a0
+        moveq   #0,d3
+.bar:   moveq   #0,d1
+        cmp.w   d5,d3
+        bhs     .emp
+        moveq   #-1,d1          ; filled: solid white
+.emp:   movea.l a0,a1
+        lea     128(a1),a1      ; pixel rows 1-6 of the cell
+        moveq   #5,d0
+.rw:    move.b  d1,(a1)
+        move.b  d1,1(a1)
+        lea     128(a1),a1
+        dbra    d0,.rw
+        addq.l  #2,a0
+        addq.w  #1,d3
+        cmp.w   #40,d3
+        blo     .bar
+        lea     80(a5),a5
+        moveq   #']',d0
+        bsr     putc
+        ; --- PASS line (panel row 1): 'PASS nn' centred (fixed pos) ---
+        movea.l #PBASE+1024+PXOFF+40,a5
+        lea     s_pass2(pc),a0
+        bsr     puts
+        move.l  20(a4),d3       ; pass number = passes done + 1
+        addq.l  #1,d3
+        divu    #10,d3
+        move.l  d3,d4
+        swap    d4              ; d4.w = units, d3.w = tens
+        tst.w   d3
+        beq     .sp
+        moveq   #'0',d0
+        add.w   d3,d0
+        bsr     putc
+        bra     .un
+.sp:    moveq   #' ',d0
+        bsr     putc
+.un:    moveq   #'0',d0
+        add.w   d4,d0
+        bsr     putc
+        ; --- TEST line (panel row 2): 'TEST n <name>' centred ---
+        moveq   #2,d0
+        bsr     pline
+        move.l  28(a4),d3
+        subq.l  #1,d3
+        bpl     .u0
+        moveq   #0,d3
+.u0:    cmpi.l  #4,d3
+        bls     .u1
+        moveq   #4,d3
+.u1:    lea     ntab(pc),a0
+        move.w  d3,d4
+        add.w   d4,d4
+        move.w  0(a0,d4.w),d4
+        adda.w  d4,a0           ; a0 = test name
+        movea.l a0,a1           ; d4 = strlen(name)
+        moveq   #-1,d4
+.sl:    addq.w  #1,d4
+        tst.b   (a1)+
+        bne     .sl
+        moveq   #82,d0          ; xoff = PXOFF + (96-14-2*len)/2, even
+        sub.w   d4,d0
+        sub.w   d4,d0
+        lsr.w   #1,d0
+        andi.w  #$FFFE,d0
+        addi.w  #PXOFF,d0
+        movea.l #PBASE+2048,a5
+        adda.w  d0,a5
+        move.l  a0,-(sp)
+        lea     s_test(pc),a0
+        bsr     puts
+        move.l  (sp)+,a0
+        moveq   #'1',d0
+        add.w   d3,d0
+        bsr     putc
+        moveq   #' ',d0
+        bsr     putc
+        bsr     puts            ; name
+.out:   movem.l (sp)+,d0-d5/a0-a1/a5
+        rts
+
+; final overlay state: 'TESTS FINISHED' (+ 'PRESS ENTER' unless d0=1)
+prog_done:
+        movem.l d0-d5/a0-a1/a5,-(sp)
+        move.l  d0,d5
+        move.l  36(a4),d2
+        cmpi.l  #SCREEN,d2
+        blo     .out
+        cmpi.l  #SCREEN+$7C00,d2
+        bhi     .out
+        bsr     pinit
+        moveq   #2,d0
+        bsr     pline
+        movea.l #PBASE+2048+PXOFF+34,a5 ; 'TESTS FINISHED' centred
+        lea     s_fin(pc),a0
+        bsr     puts
+        moveq   #4,d0
+        bsr     pline           ; wipe the bar row
+        tst.l   d5
+        bne     .out
+        movea.l #PBASE+4096+PXOFF+36,a5 ; 'PRESS ENTER' centred
+        lea     s_enter(pc),a0
+        bsr     puts
+.out:   movem.l (sp)+,d0-d5/a0-a1/a5
+        rts
+
+; draw panel background + border once per run (40(a4) = drawn flag)
+pinit:
+        movem.l d0-d1/a0-a1,-(sp)
+        tst.l   40(a4)
+        bne     .out
+        move.l  #1,40(a4)
+        movea.l #PBASE,a0       ; clear 56 pixel rows x 96 bytes
+        moveq   #55,d1
+.r:     movea.l a0,a1
+        adda.w  #PXOFF,a1
+        moveq   #23,d0
+.c:     clr.l   (a1)+
+        dbra    d0,.c
+        lea     128(a0),a0
+        dbra    d1,.r
+        movea.l #PBASE+PXOFF,a0 ; top border, 2 pixel rows
+        bsr     .hline2
+        movea.l #PBASE+54*128+PXOFF,a0 ; bottom border
+        bsr     .hline2
+        movea.l #PBASE+PXOFF,a0 ; vertical edges
+        moveq   #55,d1
+.v:     move.w  #$FFFF,(a0)
+        move.w  #$FFFF,94(a0)
+        lea     128(a0),a0
+        dbra    d1,.v
+.out:   movem.l (sp)+,d0-d1/a0-a1
+        rts
+.hline2:
+        movem.l d0/a0-a1,-(sp)
+        movea.l a0,a1
+        moveq   #23,d0
+.h1:    move.l  #-1,(a1)+
+        dbra    d0,.h1
+        movea.l a0,a1
+        lea     128(a1),a1
+        moveq   #23,d0
+.h2:    move.l  #-1,(a1)+
+        dbra    d0,.h2
+        movem.l (sp)+,d0/a0-a1
+        rts
+
+; clear the interior of panel text row d0 (0-6)
+pline:
+        movem.l d0-d1/a0-a1,-(sp)
+        lsl.l   #8,d0
+        lsl.l   #2,d0
+        addi.l  #PBASE+PXOFF+4,d0
+        movea.l d0,a0
+        moveq   #7,d1
+.r:     movea.l a0,a1
+        moveq   #21,d0          ; 88 bytes = 22 longs
+.c:     clr.l   (a1)+
+        dbra    d0,.c
+        lea     128(a0),a0
+        dbra    d1,.r
+        movem.l (sp)+,d0-d1/a0-a1
+        rts
+
+; progress from a position: fraction = (a0-a2) / (a3-a2), in 4K units
+prog_addr:
+        movem.l d0-d2,-(sp)
+        move.l  a0,d0
+        sub.l   a2,d0
+        move.l  a3,d1
+        sub.l   a2,d1
+        moveq   #12,d2
+        lsr.l   d2,d0
+        lsr.l   d2,d1
+        bne     .ok
+        moveq   #1,d1           ; window < 4K: avoid divide by zero
+.ok:    bsr     prog_frac
+        movem.l (sp)+,d0-d2
+        rts
+
+; ---------------------------------------------------------------------
+; Data
+; ---------------------------------------------------------------------
+ttab:   dc.w    t_databus-ttab
+        dc.w    t_addrbus-ttab
+        dc.w    t_alias-ttab
+        dc.w    t_marchc-ttab
+        dc.w    t_checker-ttab
+        dc.w    0
+
+s_title:  dc.b  'QL FLEX MEMTEST',0
+s_window: dc.b  'WINDOW ',0
+s_dash:   dc.b  ' - ',0
+s_test:   dc.b  'TEST ',0
+s_colon:  dc.b  ' : ',0
+s_pass:   dc.b  ' PASS',0
+s_fail:   dc.b  ' FAIL',0
+s_failat: dc.b  'FAIL AT ',0
+s_exp:    dc.b  ' EXP ',0
+s_act:    dc.b  ' ACT ',0
+s_allpass:dc.b  'ALL TESTS PASS',0
+s_failed: dc.b  'TEST FAILED',0
+s_done:   dc.b  'DONE - RESET QL',0
+s_pass2:  dc.b  'PASS ',0
+s_fin:    dc.b  'TESTS FINISHED',0
+s_enter:  dc.b  'PRESS ENTER',0
+
+        even
+ntab:   dc.w    n1-ntab
+        dc.w    n2-ntab
+        dc.w    n3-ntab
+        dc.w    n4-ntab
+        dc.w    n5-ntab
+n1:     dc.b    'DATA BUS',0
+n2:     dc.b    'ADDR BUS',0
+n3:     dc.b    'ALIAS',0
+n4:     dc.b    'MARCH C-',0
+n5:     dc.b    'PATTERN',0
+
+charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H',0
+
+glyphs: ; 8x8, one byte per pixel row, same order as charmap
+        dc.b    $00,$00,$00,$00,$00,$00,$00,$00 ; space
+        dc.b    $3C,$66,$6E,$76,$66,$66,$3C,$00 ; 0
+        dc.b    $18,$38,$18,$18,$18,$18,$7E,$00 ; 1
+        dc.b    $3C,$66,$06,$0C,$30,$60,$7E,$00 ; 2
+        dc.b    $3C,$66,$06,$1C,$06,$66,$3C,$00 ; 3
+        dc.b    $0C,$1C,$3C,$6C,$7E,$0C,$0C,$00 ; 4
+        dc.b    $7E,$60,$7C,$06,$06,$66,$3C,$00 ; 5
+        dc.b    $3C,$66,$60,$7C,$66,$66,$3C,$00 ; 6
+        dc.b    $7E,$06,$0C,$18,$30,$30,$30,$00 ; 7
+        dc.b    $3C,$66,$66,$3C,$66,$66,$3C,$00 ; 8
+        dc.b    $3C,$66,$66,$3E,$06,$66,$3C,$00 ; 9
+        dc.b    $3C,$66,$66,$7E,$66,$66,$66,$00 ; A
+        dc.b    $7C,$66,$66,$7C,$66,$66,$7C,$00 ; B
+        dc.b    $3C,$66,$60,$60,$60,$66,$3C,$00 ; C
+        dc.b    $78,$6C,$66,$66,$66,$6C,$78,$00 ; D
+        dc.b    $7E,$60,$60,$7C,$60,$60,$7E,$00 ; E
+        dc.b    $7E,$60,$60,$7C,$60,$60,$60,$00 ; F
+        dc.b    $7E,$18,$18,$18,$18,$18,$7E,$00 ; I
+        dc.b    $60,$60,$60,$60,$60,$60,$7E,$00 ; L
+        dc.b    $63,$77,$7F,$6B,$63,$63,$63,$00 ; M
+        dc.b    $66,$76,$7E,$7E,$6E,$66,$66,$00 ; N
+        dc.b    $3C,$66,$66,$66,$66,$66,$3C,$00 ; O
+        dc.b    $7C,$66,$66,$7C,$60,$60,$60,$00 ; P
+        dc.b    $3C,$66,$66,$66,$6A,$6C,$36,$00 ; Q
+        dc.b    $7C,$66,$66,$7C,$6C,$66,$66,$00 ; R
+        dc.b    $3C,$66,$60,$3C,$06,$66,$3C,$00 ; S
+        dc.b    $7E,$18,$18,$18,$18,$18,$18,$00 ; T
+        dc.b    $63,$63,$63,$6B,$7F,$77,$63,$00 ; W
+        dc.b    $66,$66,$3C,$18,$3C,$66,$66,$00 ; X
+        dc.b    $00,$18,$18,$00,$18,$18,$00,$00 ; :
+        dc.b    $00,$00,$00,$7E,$00,$00,$00,$00 ; -
+        dc.b    $3C,$30,$30,$30,$30,$30,$3C,$00 ; [
+        dc.b    $3C,$0C,$0C,$0C,$0C,$0C,$3C,$00 ; ]
+        dc.b    $66,$66,$66,$7E,$66,$66,$66,$00 ; H
+
+        even
+code_end:

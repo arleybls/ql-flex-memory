@@ -1,0 +1,5 @@
+100 REMark diagnostic: what does LBYTES actually load from memtest_bin?
+110 base = RESPR(4224)
+120 LBYTES flp1_memtest_bin, base
+130 PRINT PEEK_L(base+8) ! PEEK_W(base+12)
+140 PRINT "expected : 1363561812 2"

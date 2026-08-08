@@ -1,0 +1,4 @@
+# QL files must keep LF line endings exactly as written (QDOS uses LF)
+software/memtest/memtest_bas -text
+software/memtest/memtest_asm -text
+software/memtest/memtest_bin binary

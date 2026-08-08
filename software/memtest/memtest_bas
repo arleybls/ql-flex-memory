@@ -1,0 +1,246 @@
+100 REMark =====================================================
+110 REMark  QL Flex Memory Expansion - RAM test front-end
+120 REMark  Loads the 68008 test core (memtest_bin) with LBYTES
+130 REMark  and drives it with CALL. See README.md for usage.
+140 REMark  Needs only stock SuperBASIC (JM/JS ROM) keywords.
+150 REMark =====================================================
+160 MODE 4
+170 magic = 1363561812 : REMark 'QFMT' = $51464D54
+180 base = 0 : rb = 0 : dev$ = "flp1_"
+190 cfg = 0 : ws = 0 : we = 0 : trump = 0
+200 sbuf = 0 : stsize = 0
+205 sysbase = 163840 : REMark $28000; corrected via MT.INF once the core loads
+210 :
+220 REPeat main_menu
+230   CLS
+240   ramt = PEEK_L(sysbase+32) : REMark sysvar SV_RAMT (sysbase+$20)
+250   PRINT "QL FLEX MEMORY EXPANSION - RAM TEST"
+260   PRINT "==================================="
+270   PRINT "QDOS RAM top : $"; hx$(ramt,8); " ("; ramt/1024; "K)"
+280   PRINT "Expansion    : "; (ramt-262144)/1024; "K seen by QDOS"
+285   IF base <> 0 AND sysbase <> 163840 THEN PRINT "SYSVARS AT $"; hx$(sysbase,8); " - DUAL SCREEN / NON-QL!"
+290   IF cfg > 0 THEN PRINT "Jumper config: "; cfg$(cfg); trump$(trump)
+300   PRINT
+310   PRINT " 1 - select jumper config + size check"
+320   PRINT " 2 - safe test (QDOS-managed memory)"
+330   PRINT " 3 - window test (card invisible to QDOS)"
+340   PRINT " 4 - DESTRUCTIVE full-window test"
+350   PRINT " 5 - quit"
+360   PRINT
+370   k$ = "" : INPUT "Choice ? "; k$
+380   IF LEN(k$) = 0 THEN NEXT main_menu
+390   k = CODE(k$) - 48
+400   SELect ON k
+410     = 1 : do_config
+420     = 2 : safe_test
+430     = 3 : window_test
+440     = 4 : destr_test
+450     = 5 : EXIT main_menu
+460   END SELect
+470   PRINT : PRINT "Press any key..." : PAUSE
+480 END REPeat main_menu
+490 STOP
+500 :
+510 DEFine PROCedure do_config
+520   LOCal c$, t$
+530   PRINT
+540   PRINT "Jumper configuration (fitted cap = ON):"
+550   PRINT " 1 - JP1 OFF JP2 OFF : 512K  $40000-$BFFFF"
+560   PRINT " 2 - JP1 OFF JP2 ON  : +256K $C0000-$FFFFF"
+570   PRINT " 3 - JP1 ON  JP2 OFF : +192K $C0000-$EFFFF"
+580   PRINT " 4 - JP1 ON  JP2 ON  : +128K $C0000-$DFFFF"
+590   c$ = "" : INPUT "Config (1-4) ? "; c$
+600   IF LEN(c$) = 0 THEN RETurn
+610   cfg = CODE(c$) - 48
+620   IF cfg < 1 OR cfg > 4 THEN cfg = 0 : RETurn
+630   SELect ON cfg
+640     = 1 : ws = 262144 : we = 786432
+650     = 2 : ws = 786432 : we = 1048576
+660     = 3 : ws = 786432 : we = 983040
+670     = 4 : ws = 786432 : we = 917504
+680   END SELect
+690   trump = 0
+700   IF cfg > 1
+710     t$ = "" : INPUT "Mode header on TRUMP ? (y/n) "; t$
+720     IF t$ == "y" THEN trump = 1 : ws = ws + 32768
+730   END IF
+740   size_check
+750 END DEFine
+760 :
+770 DEFine PROCedure size_check
+780   LOCal ramt
+790   ramt = PEEK_L(sysbase+32)
+800   PRINT
+810   PRINT "Window under test : $"; hx$(ws,8); " - $"; hx$(we-1,8)
+820   IF ramt = we
+830     PRINT "QDOS RAM top matches this config."
+840     PRINT "Card is decoded - use test 2 or 4."
+850   ELSE
+860     IF ramt <= ws
+870       PRINT "Window not managed by QDOS - use test 3."
+880       IF cfg = 1 THEN PRINT "WARNING: 512K card expected but QDOS did not size it!"
+890     ELSE
+900       PRINT "SIZE MISMATCH: QDOS top $"; hx$(ramt,8); ", expected $"; hx$(we,8)
+910       PRINT "Check jumpers, GAL and solder joints."
+920     END IF
+930   END IF
+940 END DEFine
+950 :
+960 DEFine PROCedure load_core
+970   LOCal d$
+980   IF base <> 0 THEN RETurn
+990   d$ = "" : INPUT "Device with memtest_bin [flp1_] ? "; d$
+1000   IF LEN(d$) > 0 THEN dev$ = d$
+1010   base = RESPR(4224)
+1020   LBYTES dev$ & "memtest_bin", base
+1030   rb = base + 4096
+1040   IF PEEK_L(base+8) <> magic OR PEEK_W(base+12) < 2
+1050     PRINT "Bad or outdated binary - magic/version mismatch!"
+1060     base = 0 : rb = 0
+1070     RETurn
+1080   END IF
+1082   CALL base+16, rb : REMark ask the OS where the sysvars really are
+1084   sysbase = PEEK_L(rb)
+1086 END DEFine
+1090 :
+1100 DEFine FuNction ask_flags
+1110   LOCal p$, s$, p
+1120   p$ = "" : INPUT "Passes (1-99) [1] ? "; p$
+1130   p = 1
+1140   IF LEN(p$) > 0 THEN p = p$
+1150   IF p < 1 THEN p = 1
+1160   IF p > 99 THEN p = 99
+1170   s$ = "" : INPUT "Skip retention delay (emulator) ? (y/n) "; s$
+1180   IF s$ == "y" THEN RETurn p + 256
+1190   RETurn p
+1200 END DEFine
+1210 :
+1220 DEFine PROCedure safe_test
+1230   LOCal fr, fl
+1240   load_core : IF base = 0 THEN RETurn
+1250   IF sbuf = 0
+1260     fr = PEEK_L(sysbase+28) - PEEK_L(sysbase+24) : REMark sv_respr - sv_trnfr
+1270     stsize = fr - 32768
+1280     IF stsize > 458752 THEN stsize = 458752
+1290     IF stsize < 16384 THEN PRINT "Not enough free memory - reboot and retry." : RETurn
+1300     stsize = 16384 * INT(stsize/16384)
+1310     sbuf = RESPR(stsize)
+1312     IF sbuf < PEEK_L(sysbase+24)
+1314       PRINT "RESPR gave memory below the free area -"
+1316       PRINT "allocations from earlier runs have used it up."
+1318       PRINT "Reboot the QL (restart the emulator) and retry."
+1319       sbuf = 0 : stsize = 0 : RETurn
+1320     END IF
+1322   END IF
+1330   fl = ask_flags
+1340   PRINT "Buffer $"; hx$(sbuf,8); " - $"; hx$(sbuf+stsize-1,8); " ("; stsize/1024; "K)"
+1350   PRINT "Testing (the QL stays usable afterwards)..."
+1355   bar_setup
+1360   CALL base, 0, sbuf, sbuf+stsize, fl, rb
+1365   bar_wait
+1370   show_results
+1380 END DEFine
+1390 :
+1400 DEFine PROCedure window_test
+1410   LOCal fl, ramt
+1420   IF cfg = 0 THEN PRINT "Select the jumper config first (option 1)." : RETurn
+1425   load_core : IF base = 0 THEN RETurn
+1430   ramt = PEEK_L(sysbase+32)
+1440   IF ramt > ws THEN PRINT "QDOS owns this window - use test 2 or 4." : RETurn
+1460   fl = ask_flags
+1470   PRINT "Testing window $"; hx$(ws,8); " - $"; hx$(we-1,8); "..."
+1475   bar_setup
+1480   CALL base, 1, ws, we, fl, rb
+1485   bar_wait
+1490   show_results
+1500 END DEFine
+1510 :
+1520 DEFine PROCedure destr_test
+1530   LOCal fl, c$
+1540   IF cfg = 0 THEN PRINT "Select the jumper config first (option 1)." : RETurn
+1550   load_core : IF base = 0 THEN RETurn
+1552   IF sysbase <> 163840
+1553     PRINT "Sysvars are not at $28000 (Minerva dual-screen"
+1554     PRINT "mode, or not a real QL). The destructive test"
+1555     PRINT "assumes the standard memory map - disabled."
+1556     PRINT "Reboot with the second screen off to use it."
+1557     RETurn
+1558   END IF
+1560   PRINT
+1570   PRINT "DESTRUCTIVE TEST: the machine is taken over,"
+1580   PRINT "everything in RAM is destroyed and output goes"
+1590   PRINT "directly to the screen. When it says DONE you"
+1600   PRINT "must reset the QL. Save your work first!"
+1610   c$ = "" : INPUT "Type YES to run it ? "; c$
+1620   IF c$ <> "YES" THEN PRINT "Aborted." : RETurn
+1630   fl = ask_flags
+1640   CALL base+4, ws, we, fl
+1650 END DEFine
+1660 :
+1670 DEFine PROCedure show_results
+1680   LOCal bm, t
+1690   bm = PEEK_L(rb)
+1700   PRINT
+1710   IF bm = 0
+1720     PRINT "ALL TESTS PASSED"
+1730   ELSE
+1740     t = PEEK_L(rb+16)
+1750     PRINT "FAILED: test "; t; " ("; tname$(t); ")"
+1760     PRINT "at $"; hx$(PEEK_L(rb+4),8);
+1770     PRINT "  expected $"; hx$(PEEK_L(rb+8),2);
+1780     PRINT "  read $"; hx$(PEEK_L(rb+12),2)
+1790   END IF
+1800   PRINT "Passes done : "; PEEK_L(rb+20)
+1810   PRINT "Bytes tested: "; PEEK_L(rb+24)
+1820 END DEFine
+1830 :
+1840 DEFine FuNction tname$(t)
+1850   SELect ON t
+1860     = 1 : RETurn "data bus"
+1870     = 2 : RETurn "address bus"
+1880     = 3 : RETurn "aliasing/decode"
+1890     = 4 : RETurn "march c-"
+1900     = 5 : RETurn "checkerboard"
+1910   END SELect
+1920   RETurn "?"
+1930 END DEFine
+1940 :
+1950 DEFine FuNction cfg$(c)
+1960   SELect ON c
+1970     = 1 : RETurn "512K"
+1980     = 2 : RETurn "+256K"
+1990     = 3 : RETurn "+192K"
+2000     = 4 : RETurn "+128K"
+2010   END SELect
+2020   RETurn "?"
+2030 END DEFine
+2040 :
+2042 DEFine PROCedure bar_setup
+2044   REMark any frame-buffer address at rb+36 enables the centred
+2045   REMark progress overlay panel; 0 disables it (SMSQ/E systems)
+2046   IF sysbase = 163840 THEN POKE_L rb+36, 131072 : ELSE POKE_L rb+36, 0
+2048 END DEFine
+2049 :
+2050 DEFine FuNction trump$(t)
+2060   IF t = 1 THEN RETurn " TRUMP"
+2070   RETurn ""
+2080 END DEFine
+2090 :
+2100 DEFine FuNction hx$(vin, nd)
+2110   LOCal h$, i, d, v : REMark params are BY REFERENCE - never modify vin!
+2120   h$ = "" : v = vin
+2130   FOR i = 1 TO nd
+2140     d = v - 16 * INT(v/16)
+2150     IF d < 10 THEN h$ = CHR$(48+d) & h$ : ELSE h$ = CHR$(55+d) & h$
+2160     v = INT(v/16)
+2170   END FOR i
+2180   RETurn h$
+2190 END DEFine
+2200 :
+2210 DEFine PROCedure bar_wait
+2220   REMark overlay says PRESS ENTER; wait, then wipe it everywhere
+2230   LOCal k$
+2240   IF PEEK_L(rb+36) = 0 THEN RETurn
+2250   INPUT k$
+2260   CLS : CLS #2
+2270 END DEFine

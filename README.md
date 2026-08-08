@@ -59,6 +59,14 @@ https://www.instagram.com/p/CZWfWcUM5mx/
 In the `gal` folder there is the source code to be compiled with GALasm, which
 you can find here: https://github.com/daveho/GALasm
 
+## RAM test software
+
+`software/memtest/` contains a RAM test for validating an assembled card on
+the QL itself: a SuperBASIC front-end plus a 68008 machine-code core with
+data-bus, address-bus, aliasing (GAL decode), March C− and checkerboard
+tests, in both QDOS-safe and destructive full-window variants. See
+[software/memtest/README.md](software/memtest/README.md).
+
 ## Mini Trump Card Compatibility
 
 Alvaro also made a version of the Trump Card disk interface:
