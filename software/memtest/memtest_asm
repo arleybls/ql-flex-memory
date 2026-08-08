@@ -1,5 +1,6 @@
 ; =====================================================================
 ; QL Flex Memory Expansion - RAM test core
+; (C) 2026 Arley Silveira - CERN-OHL-S v2
 ; 68008 machine code, position independent. Assemble with vasm:
 ;   vasmm68k_mot -Fbin -m68008 -no-opt -o memtest_bin memtest_asm
 ; Loaded from SuperBASIC (memtest_bas) with LBYTES, driven with CALL.
@@ -1102,6 +1103,7 @@ fill_band:
         movea.l d0,a0
         move.w  #$FF00,d2       ; green
         tst.l   d1
+        
         beq     .go
         move.w  #$00FF,d2       ; red
 .go:    move.w  #511,d0         ; 8 rows x 64 words

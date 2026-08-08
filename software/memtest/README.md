@@ -1,5 +1,7 @@
 # QL Flex Memory Expansion — RAM test
 
+(C) 2026 Arley Silveira — CERN-OHL-S v2.
+
 A memory test for validating a freshly built (or suspect) QL Flex card on a
 real Sinclair QL. A SuperBASIC front-end (`memtest_bas`) drives a 68008
 machine-code core (`memtest_bin`, source in `memtest_asm`) that runs five
@@ -72,8 +74,10 @@ data files — nothing is `EXEC`ed), then from a **fresh boot**:
 
     LRUN flp1_memtest_bas
 
-(or `mdv1_`, `win1_`, … — the program asks which device holds
-`memtest_bin`.) A fresh boot matters because the loader uses `RESPR`,
+(or `mdv1_`, `win1_`, …). After a splash screen the menu appears; the
+program finds `memtest_bin` by itself, probing flp1/mdv1/win1/flp2/
+mdv2/ram1 with a QDOS `IO.OPEN` helper and only asking if none has it.
+A fresh boot matters because the loader uses `RESPR`,
 which fails with "not complete" on stock ROMs once any job has been
 started. The stock QL has no way to free `RESPR` memory, so repeated safe
 tests reuse the first buffer.

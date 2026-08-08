@@ -3,16 +3,18 @@
 120 REMark  Loads the 68008 test core (memtest_bin) with LBYTES
 130 REMark  and drives it with CALL. See README.md for usage.
 140 REMark  Needs only stock SuperBASIC (JM/JS ROM) keywords.
+145 REMark  (C) 2026 Arley Silveira - CERN-OHL-S v2
 150 REMark =====================================================
 160 MODE 4
 162 PAPER #0,0 : INK #0,7 : CLS #0
 164 PAPER #1,0 : INK #1,7 : CLS
 166 PAPER #2,0 : INK #2,7 : CLS #2
 170 magic = 1363561812 : REMark 'QFMT' = $51464D54
-180 base = 0 : rb = 0 : dev$ = "flp1_"
+180 base = 0 : rb = 0 : dev$ = "" : pb = 0
 190 cfg = 0 : ws = 0 : we = 0 : trump = 0
 200 sbuf = 0 : stsize = 0
 205 sysbase = 163840 : REMark $28000; corrected via MT.INF once the core loads
+208 splash
 210 :
 220 REPeat main_menu
 230   CLS
@@ -96,8 +98,13 @@
 960 DEFine PROCedure load_core
 970   LOCal d$
 980   IF base <> 0 THEN RETurn
-990   d$ = "" : INPUT "Device with memtest_bin [flp1_] ? "; d$
-1000   IF LEN(d$) > 0 THEN dev$ = d$
+982   find_core : REMark probe devices for memtest_bin - no prompt needed
+984   IF dev$ = ""
+986     d$ = "" : INPUT "Device with memtest_bin ? "; d$
+988     IF LEN(d$) = 0 THEN RETurn
+990     dev$ = d$
+992   END IF
+1000   PRINT "Core: "; dev$; "memtest_bin"
 1010   base = RESPR(4224)
 1020   LBYTES dev$ & "memtest_bin", base
 1030   rb = base + 4096
@@ -289,3 +296,67 @@
 2250   INPUT k$
 2260   CLS : CLS #2
 2270 END DEFine
+2280 :
+2290 REMark probe each device for memtest_bin with a tiny IO.OPEN helper
+2300 DEFine PROCedure find_core
+2310   LOCal i, w, d$, f$
+2320   IF pb = 0
+2330     pb = RESPR(128)
+2340     RESTORE 2500
+2350     FOR i = 0 TO 20 : READ w : POKE_W pb+2*i, w
+2360   END IF
+2370   RESTORE 2510
+2380   REPeat dev_loop
+2390     READ d$
+2400     IF d$ = "*" THEN dev$ = "" : EXIT dev_loop
+2410     f$ = d$ & "memtest_bin"
+2420     POKE_W pb+64, LEN(f$)
+2430     FOR i = 1 TO LEN(f$) : POKE pb+65+i, CODE(f$(i))
+2440     CALL pb, pb+64, pb+120
+2450     IF PEEK_L(pb+120) = 0 THEN dev$ = d$ : EXIT dev_loop
+2460   END REPeat dev_loop
+2470 END DEFine
+2480 :
+2490 REMark IO.OPEN probe machine code + device search order
+2500 DATA 8257, 17402, 34, 8834, 29184, 30209, 28673, 20034, 17402, 20, 8785, 8832, 19072, 26112, 6, 28674, 20034, 28672, 20085, 0, 0
+2510 DATA "flp1_", "mdv1_", "win1_", "flp2_", "mdv2_", "ram1_", "*"
+2520 :
+2530 DEFine PROCedure splash
+2540   LOCal a$
+2550   OPEN #4, con_512x256a0x0
+2552   PAPER #4,0 : INK #4,7 : CLS #4
+2554   CSIZE #4,0,0 : PRINT #4
+2556   RESTORE 2600
+2558   REPeat sprow
+2560     READ a$
+2562     IF a$ = "<>" THEN EXIT sprow
+2564     PRINT #4, FILL$(" ",14); a$
+2566   END REPeat sprow
+2568   CSIZE #4,2,1
+2570   PRINT #4, FILL$(" ",14); "Memory Tester"
+2572   CSIZE #4,0,0
+2574   PRINT #4 : PRINT #4, FILL$(" ",31); "(C) 2026 Arley Silveira"
+2576   PAUSE 150
+2578   CLOSE #4
+2580   CLS #2 : CLS
+2590 END DEFine
+2600 DATA "         ###           /## ###"
+2602 DATA "          ###        #/ ### ###"
+2604 DATA "           ##       ##   ### ##"
+2606 DATA "           ##       ##       ##"
+2608 DATA "           ##       ##       ##"
+2610 DATA "   /###    ##       ######   ##      /##   /##    ###"
+2612 DATA "  / ###  / ##       #####    ##     / ### / ###  #### /"
+2614 DATA " /   ###/  ##       ##       ##    /   ###   ### /###/"
+2616 DATA "##    ##   ##       ##       ##   ##    ###   ##/  ##"
+2618 DATA "##    ##   ##       ##       ##   ########     /##"
+2620 DATA "##    ##   ##       ##       ##   #######     / ###"
+2622 DATA "##    ##   ##       ##       ##   ##         /   ###"
+2624 DATA "##    ##   ##       ##       ##   ####    / /     ###"
+2626 DATA " #######   ### /    ##       ### / ######/ /       ### /"
+2628 DATA "  ######    ##/      ##       ##/   ##### /         ##/"
+2630 DATA "      ##"
+2632 DATA "      ##"
+2634 DATA "      ##"
+2636 DATA "       ##"
+2638 DATA "<>"
