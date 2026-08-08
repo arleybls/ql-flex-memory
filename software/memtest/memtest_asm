@@ -307,10 +307,15 @@ reloc_go:
         bsr     puts
 .stop:  bra     .stop
 
-; run_suite with on-screen progress, one row per test; a test's row
-; shows PASS or FAIL nn (cumulative fail count across all passes)
+; run_suite with on-screen progress, one row per test. The list area is
+; wiped at the start of every pass and rebuilt row by row: the running
+; test shows RUN, replaced by PASS or FAIL nn (cumulative count).
 suite_scr:
         movem.l d4-d6/a1,-(sp)
+        movea.l #SCREEN+4*1024,a0 ; clear list rows 4-8
+        move.w  #1279,d0
+.cl:    clr.l   (a0)+
+        dbra    d0,.cl
         moveq   #1,d4
         lea     ttab(pc),a1
 .next:  move.w  (a1)+,d5
@@ -326,11 +331,16 @@ suite_scr:
         bsr     putc
         lea     s_colon(pc),a0
         bsr     puts
+        move.l  a5,-(sp)        ; remember the status position
+        lea     s_run(pc),a0
+        bsr     puts
         lea     ttab(pc),a0
         adda.w  d5,a0
         movem.l d4-d5/a1,-(sp)
         jsr     (a0)
         movem.l (sp)+,d4-d5/a1
+        movea.l (sp)+,a5        ; back to the status position: the
+                                ; result text overwrites the RUN marker
         tst.l   d0
         beq     .st
         bsr     record_fail
@@ -1135,6 +1145,7 @@ s_allpass:dc.b  'ALL TESTS PASS',0
 s_failed: dc.b  'TEST FAILED',0
 s_done:   dc.b  'DONE - RESET QL',0
 s_pass2:  dc.b  'PASS ',0
+s_run:    dc.b  ' RUN',0
 s_fin:    dc.b  'TESTS FINISHED',0
 s_enter:  dc.b  'PRESS ENTER',0
 
@@ -1150,7 +1161,7 @@ n3:     dc.b    'ALIAS',0
 n4:     dc.b    'MARCH C-',0
 n5:     dc.b    'PATTERN',0
 
-charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/',0
+charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U',0
 
 glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $00,$00,$00,$00,$00,$00,$00,$00 ; space
@@ -1188,6 +1199,7 @@ glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $3C,$0C,$0C,$0C,$0C,$0C,$3C,$00 ; ]
         dc.b    $66,$66,$66,$7E,$66,$66,$66,$00 ; H
         dc.b    $06,$06,$0C,$18,$30,$60,$60,$00 ; /
+        dc.b    $66,$66,$66,$66,$66,$66,$3C,$00 ; U
 
         even
 code_end:
