@@ -337,7 +337,7 @@
 2572   CSIZE #4,0,0
 2574   PRINT #4 : PRINT #4, FILL$(" ",31); "(C) 2026 Arley Silveira"
 2576   PAUSE 150
-2578   CLOSE #4
+2578   CLS #4 : CLOSE #4 : REMark full-screen wipe - no leftovers outside #1/#2
 2580   CLS #2 : CLS
 2590 END DEFine
 2600 DATA "         ###           /## ###"
