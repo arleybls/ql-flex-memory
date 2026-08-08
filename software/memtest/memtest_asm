@@ -32,9 +32,16 @@
 ;   +24 bytes tested
 ;   +28 test currently running (1-5)
 ;   +32 done flag (1 = run finished)
-;   +36 INPUT: screen address for a progress bar (0/invalid = no bar).
-;       Must point into the MODE 4 frame buffer ($20000-$27F00); the
-;       bar is 512px wide and 2 pixel rows tall, redrawn per test.
+;   +36 INPUT: progress overlay enable - any address inside the MODE 4
+;       frame buffer ($20000-$27C00) turns the centred panel on
+;   +40 internal: panel drawn flag
+;   +44..+60 per-test fail counters (5 longs, one per test, counted
+;       across all passes - the suite no longer stops at a failure)
+;   +64 pass target (set by the core from the flags byte)
+;   +68 internal: last drawn bar fill
+;   +72 internal: last drawn pass/test state
+;   +76 panel border style: 0 = white (safe), 1 = red (destructive)
+; The result block is 80 bytes.
 ;
 ; Tests: 1 data bus (walking 1/0)    2 address bus (power-of-2 offsets)
 ;        3 aliasing (4K page tags)   4 March C-
@@ -47,7 +54,7 @@
 ; MODE 4 screen at $20000 and never returns - reset the QL afterwards.
 ; =====================================================================
 
-VERSION   equ     3
+VERSION   equ     4
 ERR_IPAR  equ     -15           ; QDOS 'bad parameter'
 RELOC     equ     $30000        ; destructive-mode copy target
 DSTACK    equ     $38000        ; destructive-mode supervisor stack
@@ -106,17 +113,17 @@ safe_entry:
         move.l  d4,d7           ; d7 = flags
         bsr     clr_result
         clr.l   40(a4)          ; panel not drawn yet
+        clr.l   76(a4)          ; white border (safe modes)
         moveq   #0,d6           ; d6 = pass count (0 -> 1)
         move.b  d7,d6
-        bne     .ploop
+        bne     .pok
         moveq   #1,d6
-.ploop: bsr     run_suite
-        tst.l   d0
-        bne     .done
+.pok:   move.l  d6,64(a4)       ; pass target for the panel
+.ploop: bsr     run_suite       ; runs all 5 tests, recording failures
         addq.l  #1,20(a4)
         subq.w  #1,d6
         bne     .ploop
-.done:  moveq   #0,d0           ; overlay: TESTS FINISHED / PRESS ENTER
+        moveq   #0,d0           ; overlay: TESTS FINISHED / PRESS ENTER
         bsr     prog_done
         clr.l   28(a4)
         move.l  #1,32(a4)
@@ -127,14 +134,18 @@ safe_entry:
         moveq   #ERR_IPAR,d0
         rts
 
-; clear result block (a4), record window size; +36 (bar address) and
-; beyond are left untouched - +36 is an input from the caller
+; clear result block (a4), record window size. +36 (overlay enable) and
+; +40 (panel flag) are the caller's business; fail counters are reset.
 clr_result:
         movem.l d0/a0,-(sp)
         movea.l a4,a0
         moveq   #8,d0
 .c:     clr.l   (a0)+
-        dbra    d0,.c
+        dbra    d0,.c           ; +0..+35
+        addq.l  #8,a0           ; skip +36/+40
+        moveq   #4,d0
+.c2:    clr.l   (a0)+
+        dbra    d0,.c2          ; +44..+63 fail counters
         move.l  a3,d0
         sub.l   a2,d0
         move.l  d0,24(a4)
@@ -142,33 +153,40 @@ clr_result:
         rts
 
 ; ---------------------------------------------------------------------
-; run_suite: run tests 1..5 over a2/a3, stop at first failing test.
+; run_suite: run ALL tests 1..5 over a2/a3, recording every failure
+; (bitmap + per-test counters; first failure's details kept).
 ; In:  a2 start, a3 end, a4 result block, d7 flags
-; Out: d0 = 0 all passed, 1 = a test failed (details recorded)
+; Out: d0 = 0 all passed, 1 = at least one test failed
 ; ---------------------------------------------------------------------
 run_suite:
         movem.l d4-d6/a1,-(sp)
         moveq   #1,d4           ; test number
         lea     ttab(pc),a1
 .next:  move.w  (a1)+,d5
-        beq     .pass
+        beq     .fin
         move.l  d4,28(a4)
         lea     ttab(pc),a0
         adda.w  d5,a0
-        movem.l d4/a1,-(sp)
+        movem.l d4-d5/a1,-(sp)
         jsr     (a0)
-        movem.l (sp)+,d4/a1
+        movem.l (sp)+,d4-d5/a1
         tst.l   d0
-        bne     .fail
-        moveq   #1,d0           ; test finished: bar to test/5 exactly
+        beq     .tick
+        bsr     record_fail
+        move.w  d4,d5           ; per-test fail counter++
+        subq.w  #1,d5
+        lsl.w   #2,d5
+        lea     44(a4),a0
+        addq.l  #1,0(a0,d5.w)
+.tick:  moveq   #1,d0           ; bar to test/5 exactly
         moveq   #1,d1
         bsr     prog_frac
         addq.w  #1,d4
         bra     .next
-.fail:  bsr     record_fail
+.fin:   moveq   #0,d0
+        tst.l   (a4)
+        beq     .out
         moveq   #1,d0
-        bra     .out
-.pass:  moveq   #0,d0
 .out:   movem.l (sp)+,d4-d6/a1
         rts
 
@@ -220,6 +238,7 @@ reloc_go:
         bsr     clr_result
         clr.l   40(a4)          ; panel not drawn yet
         move.l  #SCREEN,36(a4)  ; enable the progress overlay
+        move.l  #1,76(a4)       ; red border: destructive mode
         movea.l #SCREEN,a0      ; clear the screen
         move.w  #8191,d0
 .cs:    clr.l   (a0)+
@@ -240,18 +259,22 @@ reloc_go:
         bsr     puthexl
         moveq   #0,d6           ; pass count (0 -> 1)
         move.b  d7,d6
-        bne     .ploop
+        bne     .pok
         moveq   #1,d6
+.pok:   move.l  d6,64(a4)       ; pass target for the panel
 .ploop: bsr     suite_scr
-        tst.l   d0
-        bne     .failed
         addq.l  #1,20(a4)
         subq.w  #1,d6
         bne     .ploop
-        moveq   #21,d0
-        bsr     scr_at
+        tst.l   (a4)            ; verdict from the fail bitmap
+        bne     .failed
+        moveq   #21,d0          ; green banner
+        moveq   #0,d1
+        bsr     fill_band
+        movea.l #SCREEN+21*1024+50,a5
         lea     s_allpass(pc),a0
-        bsr     puts
+        moveq   #0,d1
+        bsr     puts_band
         bra     .halt
 .failed:
         moveq   #20,d0
@@ -268,10 +291,13 @@ reloc_go:
         bsr     puts
         move.l  12(a4),d0
         bsr     puthexb
-        moveq   #21,d0
-        bsr     scr_at
+        moveq   #21,d0          ; red banner
+        moveq   #1,d1
+        bsr     fill_band
+        movea.l #SCREEN+21*1024+52,a5
         lea     s_failed(pc),a0
-        bsr     puts
+        moveq   #1,d1
+        bsr     puts_band
 .halt:  move.l  #1,32(a4)
         moveq   #1,d0           ; overlay: TESTS FINISHED (no enter wait)
         bsr     prog_done
@@ -281,13 +307,14 @@ reloc_go:
         bsr     puts
 .stop:  bra     .stop
 
-; run_suite with on-screen progress, one row per test
+; run_suite with on-screen progress, one row per test; a test's row
+; shows PASS or FAIL nn (cumulative fail count across all passes)
 suite_scr:
         movem.l d4-d6/a1,-(sp)
         moveq   #1,d4
         lea     ttab(pc),a1
 .next:  move.w  (a1)+,d5
-        beq     .pass
+        beq     .fin
         move.l  d4,28(a4)
         moveq   #3,d0           ; row = 3 + test number
         add.w   d4,d0
@@ -301,24 +328,40 @@ suite_scr:
         bsr     puts
         lea     ttab(pc),a0
         adda.w  d5,a0
-        movem.l d4/a1,-(sp)
+        movem.l d4-d5/a1,-(sp)
         jsr     (a0)
-        movem.l (sp)+,d4/a1
+        movem.l (sp)+,d4-d5/a1
         tst.l   d0
-        bne     .fail
+        beq     .st
+        bsr     record_fail
+        move.w  d4,d5           ; per-test fail counter++
+        subq.w  #1,d5
+        lsl.w   #2,d5
+        lea     44(a4),a0
+        addq.l  #1,0(a0,d5.w)
+.st:    move.w  d4,d5           ; status from cumulative counter
+        subq.w  #1,d5
+        lsl.w   #2,d5
+        move.l  44(a4,d5.w),d5
+        bne     .pf
         lea     s_pass(pc),a0
         bsr     puts
-        moveq   #1,d0           ; test finished: bar to test/5 exactly
+        bra     .tick
+.pf:    lea     s_fail(pc),a0
+        bsr     puts
+        moveq   #' ',d0
+        bsr     putc
+        move.l  d5,d0
+        bsr     put2dec
+.tick:  moveq   #1,d0           ; bar to test/5 exactly
         moveq   #1,d1
         bsr     prog_frac
         addq.w  #1,d4
         bra     .next
-.fail:  lea     s_fail(pc),a0
-        bsr     puts
-        bsr     record_fail
+.fin:   moveq   #0,d0
+        tst.l   (a4)
+        beq     .out
         moveq   #1,d0
-        bra     .out
-.pass:  moveq   #0,d0
 .out:   movem.l (sp)+,d4-d6/a1
         rts
 
@@ -676,8 +719,8 @@ puts:                           ; a0 = zero-terminated string
 .e:     movem.l (sp)+,d0/a0
         rts
 
-putc:                           ; d0.b = character (see charmap)
-        movem.l d0-d2/a0-a1,-(sp)
+glyphof:                        ; d0.b char -> a0 = glyph bitmap
+        movem.l d1-d2,-(sp)
         lea     charmap(pc),a0
         moveq   #0,d1
 .f:     move.b  (a0)+,d2
@@ -690,6 +733,12 @@ putc:                           ; d0.b = character (see charmap)
 .got:   lea     glyphs(pc),a0
         lsl.w   #3,d1
         adda.w  d1,a0
+        movem.l (sp)+,d1-d2
+        rts
+
+putc:                           ; d0.b = character (see charmap)
+        movem.l d0-d2/a0-a1,-(sp)
+        bsr     glyphof
         movea.l a5,a1
         moveq   #7,d2
 .dr:    move.b  (a0),(a1)       ; green plane
@@ -781,53 +830,29 @@ prog_frac:
         lsl.l   #3,d3
         add.l   d3,d0
         divu    d1,d0
+        moveq   #0,d5
         move.w  d0,d5           ; d5 = filled pairs (0..40)
         bsr     pinit
-        ; --- bar row (panel row 4): [ 40 pairs ]  at byte 22 ---
-        movea.l #PBASE+4096+PXOFF+6,a5
-        moveq   #'[',d0
-        bsr     putc
-        movea.l a5,a0
-        moveq   #0,d3
-.bar:   moveq   #0,d1
-        cmp.w   d5,d3
-        bhs     .emp
-        moveq   #-1,d1          ; filled: solid white
-.emp:   movea.l a0,a1
-        lea     128(a1),a1      ; pixel rows 1-6 of the cell
-        moveq   #5,d0
-.rw:    move.b  d1,(a1)
-        move.b  d1,1(a1)
-        lea     128(a1),a1
-        dbra    d0,.rw
-        addq.l  #2,a0
-        addq.w  #1,d3
-        cmp.w   #40,d3
-        blo     .bar
-        lea     80(a5),a5
-        moveq   #']',d0
-        bsr     putc
-        ; --- PASS line (panel row 1): 'PASS nn' centred (fixed pos) ---
-        movea.l #PBASE+1024+PXOFF+40,a5
+        ; --- text lines: redraw only when the pass/test state changes ---
+        move.l  20(a4),d3
+        addq.l  #1,d3
+        lsl.l   #8,d3
+        or.l    28(a4),d3       ; state = (pass)<<8 | test
+        cmp.l   72(a4),d3
+        beq     .lines_ok
+        move.l  d3,72(a4)
+        ; PASS line (panel row 1): 'PASS nn/NN' at fixed centre
+        movea.l #PBASE+1024+PXOFF+38,a5
         lea     s_pass2(pc),a0
         bsr     puts
-        move.l  20(a4),d3       ; pass number = passes done + 1
-        addq.l  #1,d3
-        divu    #10,d3
-        move.l  d3,d4
-        swap    d4              ; d4.w = units, d3.w = tens
-        tst.w   d3
-        beq     .sp
-        moveq   #'0',d0
-        add.w   d3,d0
+        move.l  20(a4),d0
+        addq.l  #1,d0
+        bsr     put2dec
+        moveq   #'/',d0
         bsr     putc
-        bra     .un
-.sp:    moveq   #' ',d0
-        bsr     putc
-.un:    moveq   #'0',d0
-        add.w   d4,d0
-        bsr     putc
-        ; --- TEST line (panel row 2): 'TEST n <name>' centred ---
+        move.l  64(a4),d0
+        bsr     put2dec
+        ; TEST line (panel row 2): 'TEST n <name>' centred
         moveq   #2,d0
         bsr     pline
         move.l  28(a4),d3
@@ -865,7 +890,66 @@ prog_frac:
         moveq   #' ',d0
         bsr     putc
         bsr     puts            ; name
+.lines_ok:
+        ; --- bar (panel row 4): green fill, delta-drawn ---
+        move.l  68(a4),d4       ; last drawn fill
+        cmp.l   d5,d4
+        beq     .out
+        move.l  d5,68(a4)
+        cmp.l   d5,d4
+        bls     .grow
+        moveq   #0,d4           ; fill went down (new pass): redraw all
+.grow:  movea.l #PBASE+4096+PXOFF+8,a0
+        adda.w  d4,a0
+        adda.w  d4,a0           ; a0 = first cell to draw
+.cell:  cmp.w   d5,d4
+        bhs     .bdone
+        movea.l a0,a1
+        lea     128(a1),a1      ; pixel rows 1-6 of the cell
+        moveq   #5,d0
+.rw:    move.b  #$FF,(a1)       ; green plane on, red plane off
+        clr.b   1(a1)
+        lea     128(a1),a1
+        dbra    d0,.rw
+        addq.l  #2,a0
+        addq.w  #1,d4
+        bra     .cell
+.bdone: ; clear any cells beyond the fill (pass reset)
+        cmp.w   #40,d4
+        bhs     .out
+        movea.l a0,a1
+        lea     128(a1),a1
+        moveq   #5,d0
+.cw:    clr.b   (a1)
+        clr.b   1(a1)
+        lea     128(a1),a1
+        dbra    d0,.cw
+        addq.l  #2,a0
+        addq.w  #1,d4
+        bra     .bdone
 .out:   movem.l (sp)+,d0-d5/a0-a1/a5
+        rts
+
+; print d0 (0-99) as two decimal digits, blank leading zero
+put2dec:
+        movem.l d0-d2,-(sp)
+        cmpi.l  #99,d0
+        bls     .ok
+        moveq   #99,d0
+.ok:    divu    #10,d0
+        move.l  d0,d2
+        swap    d2              ; d2.w = units
+        move.w  d0,d1           ; d1.w = tens
+        moveq   #' ',d0
+        tst.w   d1
+        beq     .pt
+        moveq   #'0',d0
+        add.w   d1,d0
+.pt:    bsr     putc
+        moveq   #'0',d0
+        add.w   d2,d0
+        bsr     putc
+        movem.l (sp)+,d0-d2
         rts
 
 ; final overlay state: 'TESTS FINISHED' (+ 'PRESS ENTER' unless d0=1)
@@ -893,13 +977,21 @@ prog_done:
 .out:   movem.l (sp)+,d0-d5/a0-a1/a5
         rts
 
-; draw panel background + border once per run (40(a4) = drawn flag)
+; draw panel background + border once per run (40(a4) = drawn flag);
+; border is white for safe modes, red when 76(a4) is set (destructive)
 pinit:
-        movem.l d0-d1/a0-a1,-(sp)
+        movem.l d0-d2/a0-a1/a5,-(sp)
         tst.l   40(a4)
         bne     .out
         move.l  #1,40(a4)
-        movea.l #PBASE,a0       ; clear 56 pixel rows x 96 bytes
+        clr.l   68(a4)          ; bar starts empty
+        moveq   #-1,d0
+        move.l  d0,72(a4)       ; force first text draw
+        moveq   #-1,d2          ; border pattern: white
+        tst.l   76(a4)
+        beq     .cw
+        move.w  #$00FF,d2       ; red plane only
+.cw:    movea.l #PBASE,a0       ; clear 56 pixel rows x 96 bytes
         moveq   #55,d1
 .r:     movea.l a0,a1
         adda.w  #PXOFF,a1
@@ -914,24 +1006,76 @@ pinit:
         bsr     .hline2
         movea.l #PBASE+PXOFF,a0 ; vertical edges
         moveq   #55,d1
-.v:     move.w  #$FFFF,(a0)
-        move.w  #$FFFF,94(a0)
+.v:     move.w  d2,(a0)
+        move.w  d2,94(a0)
         lea     128(a0),a0
         dbra    d1,.v
-.out:   movem.l (sp)+,d0-d1/a0-a1
+        movea.l #PBASE+4096+PXOFF+6,a5 ; static bar brackets
+        moveq   #'[',d0
+        bsr     putc
+        lea     80(a5),a5
+        moveq   #']',d0
+        bsr     putc
+.out:   movem.l (sp)+,d0-d2/a0-a1/a5
         rts
 .hline2:
         movem.l d0/a0-a1,-(sp)
         movea.l a0,a1
-        moveq   #23,d0
-.h1:    move.l  #-1,(a1)+
+        moveq   #47,d0
+.h1:    move.w  d2,(a1)+
         dbra    d0,.h1
         movea.l a0,a1
         lea     128(a1),a1
-        moveq   #23,d0
-.h2:    move.l  #-1,(a1)+
+        moveq   #47,d0
+.h2:    move.w  d2,(a1)+
         dbra    d0,.h2
         movem.l (sp)+,d0/a0-a1
+        rts
+
+; full-width colored band, 8 pixel rows at text row d0; d1 = 0 green/1 red
+fill_band:
+        movem.l d0-d2/a0,-(sp)
+        lsl.l   #8,d0
+        lsl.l   #2,d0
+        addi.l  #SCREEN,d0
+        movea.l d0,a0
+        move.w  #$FF00,d2       ; green
+        tst.l   d1
+        beq     .go
+        move.w  #$00FF,d2       ; red
+.go:    move.w  #511,d0         ; 8 rows x 64 words
+.f:     move.w  d2,(a0)+
+        dbra    d0,.f
+        movem.l (sp)+,d0-d2/a0
+        rts
+
+; white text on a colored band at cursor a5; d1 = 0 green/1 red
+puts_band:
+        movem.l d0/a0,-(sp)
+.l:     move.b  (a0)+,d0
+        beq     .e
+        bsr     putcb
+        bra     .l
+.e:     movem.l (sp)+,d0/a0
+        rts
+
+putcb:
+        movem.l d0-d3/a0-a1,-(sp)
+        bsr     glyphof
+        movea.l a5,a1
+        moveq   #7,d2
+.dr:    move.b  (a0)+,d3
+        tst.l   d1
+        bne     .red
+        move.b  #$FF,(a1)       ; band green + glyph red = white text
+        move.b  d3,1(a1)
+        bra     .nx
+.red:   move.b  d3,(a1)         ; glyph green + band red = white text
+        move.b  #$FF,1(a1)
+.nx:    lea     128(a1),a1
+        dbra    d2,.dr
+        addq.l  #2,a5
+        movem.l (sp)+,d0-d3/a0-a1
         rts
 
 ; clear the interior of panel text row d0 (0-6)
@@ -1006,7 +1150,7 @@ n3:     dc.b    'ALIAS',0
 n4:     dc.b    'MARCH C-',0
 n5:     dc.b    'PATTERN',0
 
-charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H',0
+charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/',0
 
 glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $00,$00,$00,$00,$00,$00,$00,$00 ; space
@@ -1043,6 +1187,7 @@ glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $3C,$30,$30,$30,$30,$30,$3C,$00 ; [
         dc.b    $3C,$0C,$0C,$0C,$0C,$0C,$3C,$00 ; ]
         dc.b    $66,$66,$66,$7E,$66,$66,$66,$00 ; H
+        dc.b    $06,$06,$0C,$18,$30,$60,$60,$00 ; /
 
         even
 code_end:

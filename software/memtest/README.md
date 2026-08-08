@@ -18,8 +18,12 @@ tests over the card's memory:
 5. **Checkerboard** — `$55/$AA` fill, ~2 s retention delay, verify, then the
    inverted pattern.
 
-On failure the first failing address, the expected byte and the byte
-actually read are reported.
+All five tests always run (a failure doesn't stop the suite), so one
+session reports every problem: the results screen shows a per-test
+OK/FAIL matrix with cumulative fail counts across passes, the first
+failing address with expected/read bytes, and — since the board has a
+single 8-bit SRAM — a direct diagnosis of which data line(s) D0–D7 are
+stuck, or a GAL/address-decode hint for address-type failures.
 
 ## The three test modes
 
@@ -158,12 +162,14 @@ additionally copies both files into an emulator-mapped directory.
 `CALL base+16,result` stores the system-variables base (from `MT.INF`) as
 a long at `result`.
 `flags`: bits 0–7 = pass count, bit 8 = skip retention delay. Results are
-longs in the 64-byte block at `result`: +0 fail bitmap, +4 fail address,
-+8 expected, +12 actual, +16 failing test 1–5, +20 passes done, +24 bytes
-tested, +28 running test, +32 done flag, +36 (input) progress-overlay
-enable — any address inside the frame buffer (`$20000–$27C00`) makes the
-core draw a bordered panel centred on the screen with the pass number,
-the running test's name and a per-pass progress bar, ending in
-`TESTS FINISHED / PRESS ENTER`; 0 disables it (the front-end does this
-on SMSQ/E). After the CALL returns the front-end waits for Enter and
+longs in the 80-byte block at `result`: +0 fail bitmap, +4 fail address,
++8 expected, +12 actual, +16 first failing test 1–5, +20 passes done,
++24 bytes tested, +28 running test, +32 done flag, +36 (input)
+progress-overlay enable — any address inside the frame buffer
+(`$20000–$27C00`) makes the core draw a bordered panel centred on the
+screen with `PASS n/N`, the running test's name and a per-pass green
+progress bar, ending in `TESTS FINISHED / PRESS ENTER`; 0 disables it
+(the front-end does this on SMSQ/E). +44…+60 are per-test fail counters,
++64 the pass target, +76 selects the panel border (white = safe, red =
+destructive). After the CALL returns the front-end waits for Enter and
 clears the screen, removing the overlay. See `memtest_asm`.

@@ -5,6 +5,9 @@
 140 REMark  Needs only stock SuperBASIC (JM/JS ROM) keywords.
 150 REMark =====================================================
 160 MODE 4
+162 PAPER #0,0 : INK #0,7 : CLS #0
+164 PAPER #1,0 : INK #1,7 : CLS
+166 PAPER #2,0 : INK #2,7 : CLS #2
 170 magic = 1363561812 : REMark 'QFMT' = $51464D54
 180 base = 0 : rb = 0 : dev$ = "flp1_"
 190 cfg = 0 : ws = 0 : we = 0 : trump = 0
@@ -14,8 +17,10 @@
 220 REPeat main_menu
 230   CLS
 240   ramt = PEEK_L(sysbase+32) : REMark sysvar SV_RAMT (sysbase+$20)
-250   PRINT "QL FLEX MEMORY EXPANSION - RAM TEST"
-260   PRINT "==================================="
+250   CSIZE #1,2,1
+252   PRINT "QL FLEX RAM TEST"
+254   CSIZE #1,0,0
+260   PRINT
 270   PRINT "QDOS RAM top : $"; hx$(ramt,8); " ("; ramt/1024; "K)"
 280   PRINT "Expansion    : "; (ramt-262144)/1024; "K seen by QDOS"
 285   IF base <> 0 AND sysbase <> 163840 THEN PRINT "SYSVARS AT $"; hx$(sysbase,8); " - DUAL SCREEN / NON-QL!"
@@ -27,7 +32,9 @@
 340   PRINT " 4 - DESTRUCTIVE full-window test"
 350   PRINT " 5 - quit"
 360   PRINT
-370   k$ = "" : INPUT "Choice ? "; k$
+365   STRIP #1,7 : INK #1,0
+370   k$ = "" : INPUT " Choice ? "; k$
+375   STRIP #1,0 : INK #1,7
 380   IF LEN(k$) = 0 THEN NEXT main_menu
 390   k = CODE(k$) - 48
 400   SELect ON k
@@ -94,7 +101,7 @@
 1010   base = RESPR(4224)
 1020   LBYTES dev$ & "memtest_bin", base
 1030   rb = base + 4096
-1040   IF PEEK_L(base+8) <> magic OR PEEK_W(base+12) < 2
+1040   IF PEEK_L(base+8) <> magic OR PEEK_W(base+12) < 4
 1050     PRINT "Bad or outdated binary - magic/version mismatch!"
 1060     base = 0 : rb = 0
 1070     RETurn
@@ -133,7 +140,10 @@
 1320     END IF
 1322   END IF
 1330   fl = ask_flags
+1332   est = INT((fl && 255) * (stsize/524288) + 0.9)
+1334   IF est < 1 THEN est = 1
 1340   PRINT "Buffer $"; hx$(sbuf,8); " - $"; hx$(sbuf+stsize-1,8); " ("; stsize/1024; "K)"
+1345   PRINT "Estimated: about "; est; " min at real QL speed"
 1350   PRINT "Testing (the QL stays usable afterwards)..."
 1355   bar_setup
 1360   CALL base, 0, sbuf, sbuf+stsize, fl, rb
@@ -148,7 +158,10 @@
 1430   ramt = PEEK_L(sysbase+32)
 1440   IF ramt > ws THEN PRINT "QDOS owns this window - use test 2 or 4." : RETurn
 1460   fl = ask_flags
+1462   est = INT((fl && 255) * ((we-ws)/524288) + 0.9)
+1464   IF est < 1 THEN est = 1
 1470   PRINT "Testing window $"; hx$(ws,8); " - $"; hx$(we-1,8); "..."
+1472   PRINT "Estimated: about "; est; " min at real QL speed"
 1475   bar_setup
 1480   CALL base, 1, ws, we, fl, rb
 1485   bar_wait
@@ -174,33 +187,65 @@
 1610   c$ = "" : INPUT "Type YES to run it ? "; c$
 1620   IF c$ <> "YES" THEN PRINT "Aborted." : RETurn
 1630   fl = ask_flags
+1632   FOR f = 1 TO 4 : BORDER #1,4,2 : BEEP 1000,30 : PAUSE 8 : BORDER #1,0 : PAUSE 4 : END FOR f
 1640   CALL base+4, ws, we, fl
 1650 END DEFine
 1660 :
 1670 DEFine PROCedure show_results
-1680   LOCal bm, t
+1672   LOCal bm, t, i, cnt, xr, b, d$, ex, rd
 1690   bm = PEEK_L(rb)
 1700   PRINT
 1710   IF bm = 0
-1720     PRINT "ALL TESTS PASSED"
-1730   ELSE
-1740     t = PEEK_L(rb+16)
-1750     PRINT "FAILED: test "; t; " ("; tname$(t); ")"
-1760     PRINT "at $"; hx$(PEEK_L(rb+4),8);
-1770     PRINT "  expected $"; hx$(PEEK_L(rb+8),2);
-1780     PRINT "  read $"; hx$(PEEK_L(rb+12),2)
-1790   END IF
-1800   PRINT "Passes done : "; PEEK_L(rb+20)
-1810   PRINT "Bytes tested: "; PEEK_L(rb+24)
+1712     INK #1,4 : CSIZE #1,2,1
+1714     PRINT "ALL TESTS PASSED"
+1716     CSIZE #1,0,0 : INK #1,7
+1718     BEEP 3000,20
+1720   ELSE
+1722     INK #1,2 : CSIZE #1,2,1
+1724     PRINT "FAULTS FOUND"
+1726     CSIZE #1,0,0 : INK #1,7
+1728     BEEP 30000,200
+1730   END IF
+1740   PRINT "Passes: "; PEEK_L(rb+20); " of "; PEEK_L(rb+64); "   Bytes: "; PEEK_L(rb+24)
+1742   PRINT
+1744   FOR i = 1 TO 5
+1746     cnt = PEEK_L(rb+40+4*i)
+1748     PRINT " "; i; " "; tname$(i); " : ";
+1750     IF cnt = 0
+1752       INK #1,4 : PRINT "OK" : INK #1,7
+1754     ELSE
+1756       INK #1,2 : PRINT "FAIL x"; cnt : INK #1,7
+1758     END IF
+1760   END FOR i
+1762   IF bm = 0 THEN RETurn
+1764   t = PEEK_L(rb+16)
+1766   ex = PEEK_L(rb+8) : rd = PEEK_L(rb+12)
+1768   PRINT
+1770   PRINT "First fault: test "; t; " at $"; hx$(PEEK_L(rb+4),8)
+1772   PRINT "  expected $"; hx$(ex,2); "  read $"; hx$(rd,2)
+1774   IF t = 2 OR t = 3
+1776     PRINT "Address decode fault - check GAL,"
+1778     PRINT "jumpers and address lines."
+1780     RETurn
+1782   END IF
+1784   xr = ex ^^ rd
+1786   d$ = ""
+1788   FOR b = 0 TO 7
+1790     IF xr && (2^b) THEN d$ = d$ & " D" & b
+1792   END FOR b
+1794   IF LEN(d$) = 0 THEN RETurn
+1796   PRINT "Data line(s):"; d$;
+1798   IF xr && ex THEN PRINT " (stuck/dropping LOW)" : ELSE PRINT " (stuck HIGH)"
+1800   PRINT "Check the SRAM solder joints on those pins."
 1820 END DEFine
 1830 :
 1840 DEFine FuNction tname$(t)
 1850   SELect ON t
-1860     = 1 : RETurn "data bus"
-1870     = 2 : RETurn "address bus"
-1880     = 3 : RETurn "aliasing/decode"
-1890     = 4 : RETurn "march c-"
-1900     = 5 : RETurn "checkerboard"
+1860     = 1 : RETurn "DATA BUS"
+1870     = 2 : RETurn "ADDR BUS"
+1880     = 3 : RETurn "ALIAS"
+1890     = 4 : RETurn "MARCH C-"
+1900     = 5 : RETurn "PATTERN"
 1910   END SELect
 1920   RETurn "?"
 1930 END DEFine
