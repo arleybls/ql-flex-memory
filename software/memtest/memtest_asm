@@ -316,7 +316,19 @@ reloc_go:
         lea     44(a5),a5       ; centre the 15-char done line
         lea     s_done(pc),a0
         bsr     puts
-.stop:  bra     .stop
+.stop:  bsr     .bdly           ; blink 'TESTS FINISHED' for as long as
+        moveq   #3,d0           ; the QL sits here, roughly 1s per cycle
+        bsr     pline
+        bsr     .bdly
+        bsr     fin_line
+        bra     .stop
+.bdly:  movem.l d0-d1,-(sp)     ; about half a second; there are no
+        moveq   #2,d0           ; interrupts left to time it with
+.bo:    move.w  #$FFFF,d1
+.bi:    dbra    d1,.bi
+        dbra    d0,.bo
+        movem.l (sp)+,d0-d1
+        rts
 
 ; run_suite with on-screen progress. All five tests share one line:
 ;   DATA BUS [x]  ADDR BUS [x]  ALIAS [x]  MARCH C- [x]  PATTERN [x]
@@ -1150,10 +1162,10 @@ prog_done:
         bhi     .out
         bsr     pinit
         moveq   #2,d0
+        bsr     pline           ; wipe the TEST n line
+        moveq   #3,d0
         bsr     pline
-        movea.l #PBASE+2048+PXOFF+34,a5 ; 'TESTS FINISHED' centred
-        lea     s_fin(pc),a0
-        bsr     puts
+        bsr     fin_line
         moveq   #4,d0
         bsr     pline           ; wipe the bar row
         tst.l   d5
@@ -1162,6 +1174,16 @@ prog_done:
         lea     s_enter(pc),a0
         bsr     puts
 .out:   movem.l (sp)+,d0-d5/a0-a1/a5
+        rts
+
+; 'TESTS FINISHED' centred on panel row 3. Split out because the
+; destructive halt loop blinks it by alternating this with pline.
+fin_line:
+        movem.l d0/a0/a5,-(sp)
+        movea.l #PBASE+3072+PXOFF+34,a5
+        lea     s_fin(pc),a0
+        bsr     puts
+        movem.l (sp)+,d0/a0/a5
         rts
 
 ; draw panel background + border once per run (40(a4) = drawn flag);

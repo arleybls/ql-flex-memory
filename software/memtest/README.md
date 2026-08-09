@@ -97,8 +97,10 @@ read (`flp1_`, `mdv1_`, `win1_`, and others), then type this after a
    bracket holds a spinner while that test runs, a green tick once it has
    passed every pass so far, or a red X as soon as one pass fails. Below it
    are the progress panel and the green/red verdict banner, ending in
-   `DONE - RESET QL`. Reset or power-cycle afterwards. Expect roughly a
-   minute per pass for a 512K window at real QL speed.
+   `DONE - RESET QL`. The panel blinks `TESTS FINISHED` once the run is
+   over, so it is obvious from across the room that the QL is waiting on
+   you. Reset or power-cycle afterwards. Expect roughly a minute per pass
+   for a 512K window at real QL speed.
 
 ## Expected results per jumper configuration
 
