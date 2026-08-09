@@ -86,11 +86,12 @@ read (`flp1_`, `mdv1_`, `win1_`, and others), then type this after a
    emulators). An estimated duration is shown, then a centred overlay
    panel tracks progress: `PASS n/N`, the running test's name, and a bar
    that fills once per pass.
-5. **Results**: after `TESTS FINISHED - PRESS ENTER`, the screen clears
-   and shows the verdict (green `ALL TESTS PASSED` / red `FAULTS
-   FOUND`), passes completed, the per-test OK/FAIL×n matrix, and for
-   failures the first fault's address, expected/read bytes and the
-   data-line or address-decode diagnosis.
+5. **Results**: once the panel reads `TESTS FINISHED` above `PRESS
+   ENTER`, pressing Enter clears the screen and shows the verdict
+   (green `ALL TESTS PASSED` / red `FAULTS FOUND`), passes completed,
+   the per-test OK/FAIL×n matrix, and for failures the first fault's
+   address, expected/read bytes and the data-line or address-decode
+   diagnosis.
 6. **The destructive test** also asks you to type `YES` and
    flashes a warning. It then owns the machine and puts all five tests on a
    single line, `DATA BUS [ ]  ADDR BUS [ ]  ALIAS [ ] ...`, where each
@@ -226,6 +227,8 @@ progress-overlay enable. Any address inside the frame buffer
 screen with `PASS n/N`, the running test's name and a per-pass green
 progress bar, ending in `TESTS FINISHED / PRESS ENTER`; 0 disables it
 (the front end does this on SMSQ/E). +44 through +60 are per-test fail counters,
-+64 the pass target, +76 selects the panel border (white = safe, red =
-destructive). After the CALL returns the front-end waits for Enter and
++64 the pass target, +76 the presentation style: 0 for the safe modes, 1 for
+destructive. Besides turning the panel border from white to red, a 1 switches
+on the one-line test list drawn across text row 7, so leave it at 0 unless the
+core owns the whole screen. After the CALL returns the front-end waits for Enter and
 clears the screen, removing the overlay. See `memtest_asm`.

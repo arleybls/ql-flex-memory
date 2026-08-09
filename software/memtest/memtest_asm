@@ -41,7 +41,8 @@
 ;   +64 pass target (set by the core from the flags byte)
 ;   +68 internal: last drawn bar fill
 ;   +72 internal: last drawn pass/test state
-;   +76 panel border style: 0 = white (safe), 1 = red (destructive)
+;   +76 presentation: 0 = safe (white panel border), 1 = destructive
+;       (red border, plus the one-line test list on text row 7)
 ; The result block is 80 bytes.
 ;
 ; Tests: 1 data bus (walking 1/0)    2 address bus (power-of-2 offsets)
