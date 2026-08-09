@@ -62,6 +62,10 @@ DSTACK    equ     $38000        ; destructive-mode supervisor stack
 DRESULT   equ     $28480        ; destructive-mode result block
 SCREEN    equ     $20000        ; MODE 4 frame buffer
 CODELEN   equ     code_end-__start
+LISTROW   equ     7             ; text row holding the one-line test list
+LISTBASE  equ     SCREEN+LISTROW*1024+4   ; centres the 60-column line
+CHUNK     equ     $8000         ; sweep slice between spinner updates
+CHK       equ     $01           ; tick glyph (not an ASCII character)
 
 __start:
         bra.w   safe_entry      ; +0
@@ -314,41 +318,25 @@ reloc_go:
         bsr     puts
 .stop:  bra     .stop
 
-; run_suite with on-screen progress, one row per test. The list area is
-; wiped at the start of every pass and rebuilt row by row: the running
-; test shows RUN, replaced by PASS or FAIL nn (cumulative count).
+; run_suite with on-screen progress. All five tests share one line:
+;   DATA BUS [x]  ADDR BUS [x]  ALIAS [x]  MARCH C- [x]  PATTERN [x]
+; The bracket holds a spinner while the test runs, then a green tick if
+; every pass so far has passed or a red X once any pass has failed. The
+; line is wiped and redrawn blank at the start of each pass.
 suite_scr:
-        movem.l d4-d6/a1,-(sp)
-        movea.l #SCREEN+6*1024,a0 ; clear list rows 6-10
-        move.w  #1279,d0
-.cl:    clr.l   (a0)+
-        dbra    d0,.cl
+        movem.l d4-d6/a0-a1,-(sp)
+        bsr     list_draw
         moveq   #1,d4
         lea     ttab(pc),a1
 .next:  move.w  (a1)+,d5
         beq     .fin
         move.l  d4,28(a4)
-        moveq   #5,d0           ; row = 5 + test number (blank row above)
-        add.w   d4,d0
-        bsr     scr_at
-        lea     42(a5),a5       ; centre the list block
-        lea     s_test(pc),a0
-        bsr     puts
-        move.b  #'0',d0
-        add.b   d4,d0
-        bsr     putc
-        lea     s_colon(pc),a0
-        bsr     puts
-        move.l  a5,-(sp)        ; remember the status position
-        lea     s_run(pc),a0
-        bsr     puts
+        bsr     spin_tick       ; first frame, so no slot sits blank
         lea     ttab(pc),a0
         adda.w  d5,a0
         movem.l d4-d5/a1,-(sp)
         jsr     (a0)
         movem.l (sp)+,d4-d5/a1
-        movea.l (sp)+,a5        ; back to the status position: the
-                                ; result text overwrites the RUN marker
         tst.l   d0
         beq     .st
         bsr     record_fail
@@ -357,31 +345,127 @@ suite_scr:
         lsl.w   #2,d5
         lea     44(a4),a0
         addq.l  #1,0(a0,d5.w)
-.st:    move.w  d4,d5           ; status from cumulative counter
+.st:    moveq   #1,d0           ; bar to test/5 exactly
+        moveq   #1,d1
+        bsr     prog_frac       ; the spinner's last frame lands here
+        move.w  d4,d5           ; verdict from the cumulative counter
         subq.w  #1,d5
         lsl.w   #2,d5
         move.l  44(a4,d5.w),d5
-        bne     .pf
-        lea     s_pass(pc),a0
-        bsr     puts
-        bra     .tick
-.pf:    lea     s_fail(pc),a0
-        bsr     puts
-        moveq   #' ',d0
-        bsr     putc
-        move.l  d5,d0
-        bsr     put2dec
-.tick:  moveq   #1,d0           ; bar to test/5 exactly
-        moveq   #1,d1
-        bsr     prog_frac
+        move.w  d4,d0
+        bsr     slot_at
+        moveq   #CHK,d0
+        moveq   #0,d1           ; green
+        tst.l   d5
+        beq     .put
+        moveq   #'X',d0
+        moveq   #1,d1           ; red
+.put:   bsr     putcc
         addq.w  #1,d4
         bra     .next
 .fin:   moveq   #0,d0
         tst.l   (a4)
         beq     .out
         moveq   #1,d0
-.out:   movem.l (sp)+,d4-d6/a1
+.out:   movem.l (sp)+,d4-d6/a0-a1
         rts
+
+; d3.w = test index 0-4; returns a0 = its name and d2.w = the length.
+name_at:
+        movem.l d1,-(sp)
+        lea     ntab(pc),a0
+        move.w  d3,d1
+        add.w   d1,d1
+        move.w  0(a0,d1.w),d1
+        adda.w  d1,a0
+        moveq   #-1,d2
+.l:     addq.w  #1,d2
+        tst.b   0(a0,d2.w)
+        bne     .l
+        movem.l (sp)+,d1
+        rts
+
+; d0.w = test number 1-5; returns a5 = the screen address of that test's
+; status cell. Walks the names because the slots are unequal widths.
+slot_at:
+        movem.l d0-d3/a0,-(sp)
+        movea.l #LISTBASE,a5
+        moveq   #0,d3
+.l:     bsr     name_at
+        add.w   d2,d2           ; character cells are two bytes wide
+        addq.w  #1,d3
+        cmp.w   d0,d3
+        beq     .here
+        adda.w  d2,a5
+        lea     10(a5),a5       ; ' [x] ' sits between two names
+        cmpi.w  #5,d3
+        blo     .l
+.here:  adda.w  d2,a5
+        lea     4(a5),a5        ; step over the space and the '['
+        movem.l (sp)+,d0-d3/a0
+        rts
+
+; wipe the status line and redraw every name with an empty bracket
+list_draw:
+        movem.l d0-d3/a0/a5,-(sp)
+        movea.l #SCREEN+LISTROW*1024,a0
+        move.w  #255,d0         ; one text row = 8 pixel rows of 128
+.cl:    clr.l   (a0)+
+        dbra    d0,.cl
+        movea.l #LISTBASE,a5
+        moveq   #0,d3
+.l:     bsr     name_at
+        bsr     puts
+        lea     s_slot(pc),a0
+        bsr     puts
+        addq.w  #1,d3
+        cmpi.w  #5,d3
+        blo     .l
+        movem.l (sp)+,d0-d3/a0/a5
+        rts
+
+; advance the spinner one frame in the running test's slot. Destructive
+; mode only: 76(a4) is what tells the two modes apart, and the safe-mode
+; overlay has no test list to draw into.
+spin_tick:
+        tst.l   76(a4)
+        beq     .out
+        movem.l d0-d2/a0/a5,-(sp)
+        move.l  28(a4),d0
+        beq     .done
+        cmpi.l  #5,d0
+        bhi     .done
+        lea     spin_ix(pc),a0
+        moveq   #0,d1
+        move.b  (a0),d1
+        addq.b  #1,d1
+        andi.w  #3,d1
+        move.b  d1,(a0)
+        lea     spin_ch(pc),a0
+        move.b  0(a0,d1.w),d2
+        bsr     slot_at
+        move.b  d2,d0
+        moveq   #2,d1           ; white
+        bsr     putcc
+.done:  movem.l (sp)+,d0-d2/a0/a5
+.out:   rts
+
+; Slice a long linear sweep so the spinner keeps moving through it: a1
+; becomes the end of the next CHUNK bytes, clamped to the window.
+chk_up:                         ; ascending: a1 = min(a0+CHUNK, a3)
+        movea.l a0,a1
+        adda.l  #CHUNK,a1
+        cmpa.l  a3,a1
+        bls     .ok
+        movea.l a3,a1
+.ok:    bra     spin_tick       ; tail call
+chk_dn:                         ; descending: a1 = max(a0-CHUNK, a2)
+        movea.l a0,a1
+        suba.l  #CHUNK,a1
+        cmpa.l  a2,a1
+        bhs     .ok
+        movea.l a2,a1
+.ok:    bra     spin_tick       ; tail call
 
 ; ---------------------------------------------------------------------
 ; Test 1: data bus - walking 1s and 0s at one location per 64K block.
@@ -581,58 +665,76 @@ t_alias:
 ; descending) - stuck-at, transition and coupling faults.
 ; ---------------------------------------------------------------------
 t_marchc:
-        movem.l d6/a0,-(sp)
+        movem.l d6/a0-a1,-(sp)
         moveq   #0,d0
         bsr     .pr6
         movea.l a2,a0           ; up: w0
+.s1:    bsr     chk_up
 .e1:    clr.b   (a0)+
-        cmpa.l  a3,a0
+        cmpa.l  a1,a0
         blo     .e1
+        cmpa.l  a3,a0
+        blo     .s1
         moveq   #1,d0
         bsr     .pr6
         movea.l a2,a0           ; up: r0,w1
+.s2:    bsr     chk_up
 .e2:    move.b  (a0),d6
         bne     .fail0
         move.b  #$FF,(a0)+
-        cmpa.l  a3,a0
+        cmpa.l  a1,a0
         blo     .e2
+        cmpa.l  a3,a0
+        blo     .s2
         moveq   #2,d0
         bsr     .pr6
         movea.l a2,a0           ; up: r1,w0
+.s3:    bsr     chk_up
 .e3:    move.b  (a0),d6
         cmpi.b  #$FF,d6
         bne     .fail1
         clr.b   (a0)+
-        cmpa.l  a3,a0
+        cmpa.l  a1,a0
         blo     .e3
+        cmpa.l  a3,a0
+        blo     .s3
         moveq   #3,d0
         bsr     .pr6
         movea.l a3,a0           ; down: r0,w1
+.s4:    bsr     chk_dn
 .e4:    move.b  -(a0),d6
         bne     .fail0
         move.b  #$FF,(a0)
-        cmpa.l  a2,a0
+        cmpa.l  a1,a0
         bhi     .e4
+        cmpa.l  a2,a0
+        bhi     .s4
         moveq   #4,d0
         bsr     .pr6
         movea.l a3,a0           ; down: r1,w0
+.s5:    bsr     chk_dn
 .e5:    move.b  -(a0),d6
         cmpi.b  #$FF,d6
         bne     .fail1
         clr.b   (a0)
-        cmpa.l  a2,a0
+        cmpa.l  a1,a0
         bhi     .e5
+        cmpa.l  a2,a0
+        bhi     .s5
         moveq   #5,d0
         bsr     .pr6
         movea.l a3,a0           ; down: r0
+.s6:    bsr     chk_dn
 .e6:    move.b  -(a0),d6
         bne     .fail0
-        cmpa.l  a2,a0
+        cmpa.l  a1,a0
         bhi     .e6
+        cmpa.l  a2,a0
+        bhi     .s6
         moveq   #6,d0
         bsr     .pr6
         moveq   #0,d0
-        movem.l (sp)+,d6/a0
+        movem.l (sp)+,d6/a0-a1
         rts
 .pr6:   moveq   #6,d1
         bra     prog_frac       ; tail call
@@ -643,7 +745,7 @@ t_marchc:
         moveq   #0,d3
         move.b  d6,d3
         moveq   #1,d0
-        movem.l (sp)+,d6/a0
+        movem.l (sp)+,d6/a0-a1
         rts
 
 ; ---------------------------------------------------------------------
@@ -651,7 +753,7 @@ t_marchc:
 ; inverted pattern. Flag bit 8 skips the delays (emulator runs).
 ; ---------------------------------------------------------------------
 t_checker:
-        movem.l d4-d6/a0,-(sp)
+        movem.l d4-d6/a0-a1,-(sp)
         moveq   #0,d4           ; phase 0: $55 first, phase 1: $AA first
 .phase: move.b  #$55,d5
         tst.w   d4
@@ -664,10 +766,13 @@ t_checker:
         bsr     prog_frac
         movea.l a2,a0
         move.b  d5,d6
+.fc:    bsr     chk_up
 .f1:    move.b  d6,(a0)+
         not.b   d6
-        cmpa.l  a3,a0
+        cmpa.l  a1,a0
         blo     .f1
+        cmpa.l  a3,a0
+        blo     .fc
         bsr     delay2s
         moveq   #0,d0
         move.w  d4,d0
@@ -677,13 +782,16 @@ t_checker:
         bsr     prog_frac
         movea.l a2,a0
         move.b  d5,d6
+.vc:    bsr     chk_up
 .v1:    move.b  (a0),d0
         cmp.b   d6,d0
         bne     .fail
         addq.l  #1,a0
         not.b   d6
-        cmpa.l  a3,a0
+        cmpa.l  a1,a0
         blo     .v1
+        cmpa.l  a3,a0
+        blo     .vc
         addq.w  #1,d4
         cmpi.w  #2,d4
         blo     .phase
@@ -691,7 +799,7 @@ t_checker:
         moveq   #1,d1
         bsr     prog_frac
         moveq   #0,d0
-        movem.l (sp)+,d4-d6/a0
+        movem.l (sp)+,d4-d6/a0-a1
         rts
 .fail:  move.l  a0,d1
         moveq   #0,d2
@@ -699,7 +807,7 @@ t_checker:
         moveq   #0,d3
         move.b  d0,d3
         moveq   #1,d0
-        movem.l (sp)+,d4-d6/a0
+        movem.l (sp)+,d4-d6/a0-a1
         rts
 
 ; ~2 seconds busy loop on a 7.5MHz 68008; skipped when flag bit 8 set
@@ -708,7 +816,8 @@ delay2s:
         bne     .skip
         movem.l d0-d1,-(sp)
         moveq   #11,d0
-.o:     move.w  #$FFFF,d1
+.o:     bsr     spin_tick       ; the retention wait still looks alive
+        move.w  #$FFFF,d1
 .i:     dbra    d1,.i
         dbra    d0,.o
         movem.l (sp)+,d0-d1
@@ -765,6 +874,26 @@ putc:                           ; d0.b = character (see charmap)
         dbra    d2,.dr
         addq.l  #2,a5
         movem.l (sp)+,d0-d2/a0-a1
+        rts
+
+putcc:                          ; d0.b = char, d1 = 0 green 1 red 2 white
+        movem.l d0-d3/a0-a1,-(sp)
+        bsr     glyphof
+        movea.l a5,a1
+        moveq   #7,d2
+.dr:    move.b  (a0)+,d3
+        clr.b   (a1)            ; both planes: the cell is redrawn often
+        clr.b   1(a1)
+        cmpi.w  #1,d1
+        beq     .red
+        move.b  d3,(a1)         ; green plane
+        cmpi.w  #2,d1
+        bne     .nx
+.red:   move.b  d3,1(a1)        ; red plane; both planes together = white
+.nx:    lea     128(a1),a1
+        dbra    d2,.dr
+        addq.l  #2,a5
+        movem.l (sp)+,d0-d3/a0-a1
         rts
 
 ; double-size (16x16) text: each glyph pixel becomes 2x2
@@ -874,6 +1003,7 @@ prog_frac:
         blo     .out
         cmpi.l  #SCREEN+$7C00,d2
         bhi     .out
+        bsr     spin_tick
         tst.l   d1
         beq     .out
         cmp.l   d1,d0           ; clamp numerator
@@ -928,19 +1058,10 @@ prog_frac:
 .u0:    cmpi.l  #4,d3
         bls     .u1
         moveq   #4,d3
-.u1:    lea     ntab(pc),a0
-        move.w  d3,d4
-        add.w   d4,d4
-        move.w  0(a0,d4.w),d4
-        adda.w  d4,a0           ; a0 = test name
-        movea.l a0,a1           ; d4 = strlen(name)
-        moveq   #-1,d4
-.sl:    addq.w  #1,d4
-        tst.b   (a1)+
-        bne     .sl
+.u1:    bsr     name_at         ; a0 = test name, d2 = its length
         moveq   #82,d0          ; xoff = PXOFF + (96-14-2*len)/2, even
-        sub.w   d4,d0
-        sub.w   d4,d0
+        sub.w   d2,d0
+        sub.w   d2,d0
         lsr.w   #1,d0
         andi.w  #$FFFE,d0
         addi.w  #PXOFF,d0
@@ -1192,9 +1313,7 @@ s_title:  dc.b  'QL FLEX MEMTEST',0
 s_window: dc.b  'WINDOW ',0
 s_dash:   dc.b  ' - ',0
 s_test:   dc.b  'TEST ',0
-s_colon:  dc.b  ' : ',0
-s_pass:   dc.b  ' PASS',0
-s_fail:   dc.b  ' FAIL',0
+s_slot:   dc.b  ' [ ] ',0
 s_failat: dc.b  'FAIL AT ',0
 s_exp:    dc.b  ' EXP ',0
 s_act:    dc.b  ' ACT ',0
@@ -1202,9 +1321,11 @@ s_allpass:dc.b  'ALL TESTS PASS',0
 s_failed: dc.b  'TEST FAILED',0
 s_done:   dc.b  'DONE - RESET QL',0
 s_pass2:  dc.b  'PASS ',0
-s_run:    dc.b  ' RUN',0
 s_fin:    dc.b  'TESTS FINISHED',0
 s_enter:  dc.b  'PRESS ENTER',0
+
+spin_ch:  dc.b  '-',$5C,$7C,'/' ; spinner frames, cycled by spin_tick
+spin_ix:  dc.b  0               ; live frame index (the code runs in RAM)
 
         even
 ntab:   dc.w    n1-ntab
@@ -1221,7 +1342,8 @@ n5:     dc.b    'PATTERN',0
 dbltab: dc.b    $00,$03,$0C,$0F,$30,$33,$3C,$3F ; nibble -> doubled bits
         dc.b    $C0,$C3,$CC,$CF,$F0,$F3,$FC,$FF
 
-charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U$',0
+charmap:  dc.b  ' 0123456789ABCDEFILMNOPQRSTWX:-[]H/U$'
+          dc.b  CHK,$5C,$7C,0   ; tick, backslash and bar: status cells
 
 glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $00,$00,$00,$00,$00,$00,$00,$00 ; space
@@ -1261,6 +1383,9 @@ glyphs: ; 8x8, one byte per pixel row, same order as charmap
         dc.b    $06,$06,$0C,$18,$30,$60,$60,$00 ; /
         dc.b    $66,$66,$66,$66,$66,$66,$3C,$00 ; U
         dc.b    $18,$3E,$60,$3C,$06,$7C,$18,$00 ; $
+        dc.b    $00,$03,$06,$0C,$58,$70,$30,$00 ; tick
+        dc.b    $00,$C0,$60,$30,$18,$0C,$06,$00 ; backslash
+        dc.b    $18,$18,$18,$18,$18,$18,$18,$00 ; bar
 
         even
 code_end:

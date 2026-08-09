@@ -92,8 +92,11 @@ read (`flp1_`, `mdv1_`, `win1_`, and others), then type this after a
    failures the first fault's address, expected/read bytes and the
    data-line or address-decode diagnosis.
 6. **The destructive test** also asks you to type `YES` and
-   flashes a warning. It then owns the machine and displays a test list with a
-   live `RUN` marker, progress panel, green/red verdict banner, ending in
+   flashes a warning. It then owns the machine and puts all five tests on a
+   single line, `DATA BUS [ ]  ADDR BUS [ ]  ALIAS [ ] ...`, where each
+   bracket holds a spinner while that test runs, a green tick once it has
+   passed every pass so far, or a red X as soon as one pass fails. Below it
+   are the progress panel and the green/red verdict banner, ending in
    `DONE - RESET QL`. Reset or power-cycle afterwards. Expect roughly a
    minute per pass for a 512K window at real QL speed.
 
