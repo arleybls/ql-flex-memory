@@ -152,11 +152,14 @@
 1380 END DEFine
 1390 :
 1400 DEFine PROCedure window_test
-1410   LOCal fl
+1410   LOCal fl, k$
 1425   load_core : IF base = 0 THEN RETurn
 1430   detect_win
 1440   IF ws = 0 THEN PRINT "No RAM outside QDOS found - use test 1 or 3." : RETurn
 1450   PRINT "Detected window: $"; hx$(ws,8); " - $"; hx$(we-1,8); win$(ws,we)
+1452   IF win$(ws,we) = "" THEN PRINT "WARNING: no known config matches - this may be a phantom window (floating bus) or a decode fault."
+1454   k$ = "" : INPUT "Test this window ? (y/n) "; k$
+1456   IF NOT (k$ == "y") THEN RETurn
 1460   fl = ask_flags
 1462   est = INT((fl && 255) * ((we-ws)/524288) + 0.9)
 1464   IF est < 1 THEN est = 1
