@@ -4,6 +4,9 @@
 # KiCad local history
 .history/
 
+# Local design notes
+docs/
+
 # Temporary files
 *.000
 *.bak
