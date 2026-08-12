@@ -225,8 +225,8 @@ Whatever you normally use works: a Gotek/floppy with a QDOS disk image
 (build one with [qltools](https://github.com/SinclairQL/qltools)), QL-SD,
 a Qubide CF card, or a serial link. For microdrive emulators such as the
 MicroPicoDrive, build a `.mdv` cartridge image containing both files with
-[sinclair-mdv-builder](https://github.com/arleybls/sinclair-mdv-builder)
-(by the same author). Both files are ordinary data files with no
+[sinclair-mdv-builder](https://github.com/arleybls/sinclair-mdv-builder).
+Both files are ordinary data files with no
 executable header, so any transfer method is fine.
 
 ## Building from source
