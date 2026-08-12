@@ -107,6 +107,30 @@ read (`flp1_`, `mdv1_`, `win1_`, and others), then type this after a
    you. Reset or power-cycle afterwards. Expect roughly a minute per pass
    for a 512K window at real QL speed.
 
+### When is the window test (option 2) viable?
+
+The window test only runs when the card's RAM exists but QDOS has not
+claimed it; otherwise it refuses with `No RAM outside QDOS found - use
+test 1 or 3.` That situation arises in three cases:
+
+* **A top-config card (+256K/+192K/+128K) installed alone** - the
+  intended use. QDOS sizes RAM contiguously from `$40000` and stops at
+  the hole there, so the whole `$C0000` window sits unclaimed. The
+  complete window can be tested, alias checks included, while the QL
+  keeps running.
+* **The same configs with the TRUMP header fitted** - identical, except
+  the window starts at `$C8000` and is reported as a TRUMP variant.
+* **A partly-broken card, as a diagnostic side effect** - if boot
+  sizing stopped early because a block in the middle is dead, any
+  working RAM above that point shows up as unclaimed and gets tested.
+  A detected window that matches no known configuration name is itself
+  the finding.
+
+It is not viable for a healthy 512K card (QDOS owns the window - use
+test 1 or 3) or for stacked setups QDOS sized through. Note that the
++128K config alone may not boot on JM/JS ROMs (see the warnings below),
+so in practice its window test needs Minerva or the companion card.
+
 ## Expected results per jumper configuration
 
 Jumper fitted = ON. Addresses from the GAL equations in
