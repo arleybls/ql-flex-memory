@@ -11,7 +11,7 @@
 166 PAPER #2,0 : INK #2,7 : CLS #2
 170 magic = 1363561812 : REMark 'QFMT' = $51464D54
 180 base = 0 : rb = 0 : dev$ = "" : pb = 0
-190 cfg = 0 : ws = 0 : we = 0 : trump = 0
+190 ws = 0 : we = 0
 200 sbuf = 0 : stsize = 0
 205 sysbase = 163840 : REMark $28000; corrected via MT.INF once the core loads
 208 splash
@@ -26,13 +26,11 @@
 270   PRINT "QDOS RAM top : $"; hx$(ramt,8); " ("; ramt/1024; "K)"
 280   PRINT "Expansion    : "; (ramt-262144)/1024; "K seen by QDOS"
 285   IF base <> 0 AND sysbase <> 163840 THEN PRINT "SYSVARS AT $"; hx$(sysbase,8); " - DUAL SCREEN / NON-QL!"
-290   IF cfg > 0 THEN PRINT "Jumper config: "; cfg$(cfg); trump$(trump)
 300   PRINT
-310   PRINT " 1 - select jumper config + size check"
-320   PRINT " 2 - safe test (QDOS-managed memory)"
-330   PRINT " 3 - window test (card invisible to QDOS)"
-340   PRINT " 4 - DESTRUCTIVE full-window test"
-350   PRINT " 5 - quit"
+320   PRINT " 1 - safe test (QDOS-managed memory)"
+330   PRINT " 2 - window test (card invisible to QDOS)"
+340   PRINT " 3 - DESTRUCTIVE full-window test"
+350   PRINT " 4 - quit"
 360   PRINT
 365   STRIP #1,7 : INK #1,0
 370   k$ = "" : INPUT " Choice ? "; k$
@@ -40,60 +38,55 @@
 380   IF LEN(k$) = 0 THEN NEXT main_menu
 390   k = CODE(k$) - 48
 400   SELect ON k
-410     = 1 : do_config
-420     = 2 : safe_test
-430     = 3 : window_test
-440     = 4 : destr_test
-450     = 5 : EXIT main_menu
+410     = 1 : safe_test
+420     = 2 : window_test
+430     = 3 : destr_test
+440     = 4 : EXIT main_menu
 460   END SELect
 470   PRINT : PRINT "Press any key..." : PAUSE
 480 END REPeat main_menu
 490 STOP
 500 :
-510 DEFine PROCedure do_config
-520   LOCal c$, t$
-530   PRINT
-540   PRINT "Jumper configuration (fitted cap = ON):"
-550   PRINT " 1 - JP1 OFF JP2 OFF : 512K  $40000-$BFFFF"
-560   PRINT " 2 - JP1 OFF JP2 ON  : +256K $C0000-$FFFFF"
-570   PRINT " 3 - JP1 ON  JP2 OFF : +192K $C0000-$EFFFF"
-580   PRINT " 4 - JP1 ON  JP2 ON  : +128K $C0000-$DFFFF"
-590   c$ = "" : INPUT "Config (1-4) ? "; c$
-600   IF LEN(c$) = 0 THEN RETurn
-610   cfg = CODE(c$) - 48
-620   IF cfg < 1 OR cfg > 4 THEN cfg = 0 : RETurn
-630   SELect ON cfg
-640     = 1 : ws = 262144 : we = 786432
-650     = 2 : ws = 786432 : we = 1048576
-660     = 3 : ws = 786432 : we = 983040
-670     = 4 : ws = 786432 : we = 917504
-680   END SELect
-690   trump = 0
-700   IF cfg > 1
-710     t$ = "" : INPUT "Mode header on TRUMP ? (y/n) "; t$
-720     IF t$ == "y" THEN trump = 1 : ws = ws + 32768
-730   END IF
-740   size_check
-750 END DEFine
-760 :
-770 DEFine PROCedure size_check
-780   LOCal ramt
-790   ramt = PEEK_L(sysbase+32)
-800   PRINT
-810   PRINT "Window under test : $"; hx$(ws,8); " - $"; hx$(we-1,8)
-820   IF ramt = we
-830     PRINT "QDOS RAM top matches this config."
-840     PRINT "Card is decoded - use test 2 or 4."
-850   ELSE
-860     IF ramt <= ws
-870       PRINT "Window not managed by QDOS - use test 3."
-880       IF cfg = 1 THEN PRINT "WARNING: 512K card expected but QDOS did not size it!"
-890     ELSE
-900       PRINT "SIZE MISMATCH: QDOS top $"; hx$(ramt,8); ", expected $"; hx$(we,8)
-910       PRINT "Check jumpers, GAL and solder joints."
-920     END IF
-930   END IF
-940 END DEFine
+510 DEFine FuNction blk_ram(a)
+520   LOCal s1, s2, ok
+530   s1 = PEEK(a) : s2 = PEEK(a+16384)
+540   POKE a,85 : POKE a+16384,170
+550   ok = (PEEK(a) = 85) AND (PEEK(a+16384) = 170)
+560   IF ok THEN POKE a,170 : POKE a+16384,85 : ok = (PEEK(a) = 170) AND (PEEK(a+16384) = 85)
+570   POKE a,s1 : POKE a+16384,s2
+580   RETurn ok
+590 END DEFine
+600 :
+610 REMark find the card's window: probe 32K blocks above the QDOS RAM top
+620 DEFine PROCedure detect_win
+630   LOCal a, ramt
+640   ws = 0 : we = 0
+650   ramt = PEEK_L(sysbase+32)
+660   a = ramt : IF a < 262144 THEN a = 262144
+670   REPeat find_start
+680     IF a >= 1048576 THEN EXIT find_start
+690     IF blk_ram(a) THEN ws = a : EXIT find_start
+700     a = a + 32768
+710   END REPeat find_start
+720   IF ws = 0 THEN RETurn
+730   we = ws + 32768
+740   REPeat find_end
+750     IF we >= 1048576 THEN EXIT find_end
+760     IF NOT blk_ram(we) THEN EXIT find_end
+770     we = we + 32768
+780   END REPeat find_end
+790 END DEFine
+800 :
+810 DEFine FuNction win$(s, e)
+820   IF s = 262144 AND e = 786432 THEN RETurn " (512K)"
+830   IF s = 786432 AND e = 1048576 THEN RETurn " (+256K)"
+840   IF s = 786432 AND e = 983040 THEN RETurn " (+192K)"
+850   IF s = 786432 AND e = 917504 THEN RETurn " (+128K)"
+860   IF s = 819200 AND e = 1048576 THEN RETurn " (+256K TRUMP)"
+870   IF s = 819200 AND e = 983040 THEN RETurn " (+192K TRUMP)"
+880   IF s = 819200 AND e = 917504 THEN RETurn " (+128K TRUMP)"
+890   RETurn ""
+900 END DEFine
 950 :
 960 DEFine PROCedure load_core
 970   LOCal d$
@@ -108,7 +101,7 @@
 1010   base = RESPR(4224)
 1020   LBYTES dev$ & "memtest_bin", base
 1030   rb = base + 4096
-1040   IF PEEK_L(base+8) <> magic OR PEEK_W(base+12) < 4
+1040   IF PEEK_L(base+8) <> magic OR PEEK_W(base+12) < 5
 1050     PRINT "Bad or outdated binary - magic/version mismatch!"
 1060     base = 0 : rb = 0
 1070     RETurn
@@ -159,11 +152,11 @@
 1380 END DEFine
 1390 :
 1400 DEFine PROCedure window_test
-1410   LOCal fl, ramt
-1420   IF cfg = 0 THEN PRINT "Select the jumper config first (option 1)." : RETurn
+1410   LOCal fl
 1425   load_core : IF base = 0 THEN RETurn
-1430   ramt = PEEK_L(sysbase+32)
-1440   IF ramt > ws THEN PRINT "QDOS owns this window - use test 2 or 4." : RETurn
+1430   detect_win
+1440   IF ws = 0 THEN PRINT "No RAM outside QDOS found - use test 1 or 3." : RETurn
+1450   PRINT "Detected window: $"; hx$(ws,8); " - $"; hx$(we-1,8); win$(ws,we)
 1460   fl = ask_flags
 1462   est = INT((fl && 255) * ((we-ws)/524288) + 0.9)
 1464   IF est < 1 THEN est = 1
@@ -176,8 +169,7 @@
 1500 END DEFine
 1510 :
 1520 DEFine PROCedure destr_test
-1530   LOCal fl, c$
-1540   IF cfg = 0 THEN PRINT "Select the jumper config first (option 1)." : RETurn
+1530   LOCal fl, c$, dws, dwe, ramt
 1550   load_core : IF base = 0 THEN RETurn
 1552   IF sysbase <> 163840
 1553     PRINT "Sysvars are not at $28000 (Minerva dual-screen"
@@ -186,8 +178,21 @@
 1556     PRINT "Reboot with the second screen off to use it."
 1557     RETurn
 1558   END IF
-1560   PRINT
-1570   PRINT "DESTRUCTIVE TEST: the machine is taken over,"
+1559   ramt = PEEK_L(sysbase+32)
+1560   detect_win
+1561   dws = 0 : dwe = 0
+1562   IF ramt > 262144 THEN dws = 262144 : dwe = ramt
+1563   IF ws > 0
+1564     IF dwe = ws
+1565       dwe = we
+1566     ELSE
+1567       IF dws = 0 THEN dws = ws : dwe = we : ELSE PRINT "Extra RAM at $"; hx$(ws,8); " not contiguous - use test 2 for it."
+1568     END IF
+1569   END IF
+1570   IF dws = 0 THEN PRINT "No expansion RAM found to test." : RETurn
+1571   PRINT "Window: $"; hx$(dws,8); " - $"; hx$(dwe-1,8); win$(dws,dwe)
+1572   PRINT
+1573   PRINT "DESTRUCTIVE TEST: the machine is taken over,"
 1580   PRINT "everything in RAM is destroyed and output goes"
 1590   PRINT "directly to the screen. When it says DONE you"
 1600   PRINT "must reset the QL. Save your work first!"
@@ -195,7 +200,7 @@
 1620   IF c$ <> "YES" THEN PRINT "Aborted." : RETurn
 1630   fl = ask_flags
 1632   FOR f = 1 TO 4 : BORDER #1,4,2 : BEEP 1000,30 : PAUSE 8 : BORDER #1,0 : PAUSE 4 : END FOR f
-1640   CALL base+4, ws, we, fl
+1640   CALL base+4, dws, dwe, fl
 1650 END DEFine
 1660 :
 1670 DEFine PROCedure show_results
@@ -257,26 +262,11 @@
 1920   RETurn "?"
 1930 END DEFine
 1940 :
-1950 DEFine FuNction cfg$(c)
-1960   SELect ON c
-1970     = 1 : RETurn "512K"
-1980     = 2 : RETurn "+256K"
-1990     = 3 : RETurn "+192K"
-2000     = 4 : RETurn "+128K"
-2010   END SELect
-2020   RETurn "?"
-2030 END DEFine
-2040 :
 2042 DEFine PROCedure bar_setup
 2044   REMark any frame-buffer address at rb+36 enables the centred
 2045   REMark progress overlay panel; 0 disables it (SMSQ/E systems)
 2046   IF sysbase = 163840 THEN POKE_L rb+36, 131072 : ELSE POKE_L rb+36, 0
 2048 END DEFine
-2049 :
-2050 DEFine FuNction trump$(t)
-2060   IF t = 1 THEN RETurn " TRUMP"
-2070   RETurn ""
-2080 END DEFine
 2090 :
 2100 DEFine FuNction hx$(vin, nd)
 2110   LOCal h$, i, d, v : REMark params are BY REFERENCE - never modify vin!
@@ -290,10 +280,16 @@
 2190 END DEFine
 2200 :
 2210 DEFine PROCedure bar_wait
-2220   REMark overlay says PRESS ENTER; wait, then wipe it everywhere
-2230   LOCal k$
+2220   REMark overlay says PRESS ENTER; blink TESTS FINISHED via the
+2225   REMark core's +20 entry while waiting, then wipe it everywhere
+2230   LOCal k$, ph
 2240   IF PEEK_L(rb+36) = 0 THEN RETurn
-2250   INPUT k$
+2245   ph = 1
+2250   REPeat wait_enter
+2252     k$ = INKEY$(#1,25)
+2254     IF k$ = CHR$(10) THEN EXIT wait_enter
+2256     ph = 1 - ph : CALL base+20, rb, ph
+2258   END REPeat wait_enter
 2260   CLS : CLS #2
 2270 END DEFine
 2280 :

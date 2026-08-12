@@ -56,7 +56,7 @@
 ; MODE 4 screen at $20000 and never returns - reset the QL afterwards.
 ; =====================================================================
 
-VERSION   equ     4
+VERSION   equ     5
 ERR_IPAR  equ     -15           ; QDOS 'bad parameter'
 RELOC     equ     $30000        ; destructive-mode copy target
 DSTACK    equ     $38000        ; destructive-mode supervisor stack
@@ -75,6 +75,7 @@ __start:
         dc.w    VERSION         ; +12
         dc.w    0               ; +14 pad
         bra.w   info_entry      ; +16
+        bra.w   blink_entry     ; +20
 
 ; ---------------------------------------------------------------------
 ; Info entry: D1 = address to store the system-variables base (long),
@@ -94,6 +95,36 @@ info_entry:
         moveq   #0,d0
         rts
 .bad:   movem.l (sp)+,d1-d2/a0-a1
+        moveq   #ERR_IPAR,d0
+        rts
+
+; ---------------------------------------------------------------------
+; Blink entry: D1 = result block, D2 = phase. Wipes (0) or redraws (1)
+; the TESTS FINISHED panel row, so the front-end can blink it while it
+; waits for Enter after a safe run. No-op when the overlay is off.
+; ---------------------------------------------------------------------
+blink_entry:
+        movem.l d1-d7/a0-a6,-(sp)
+        tst.l   d1
+        beq     .bad
+        btst    #0,d1
+        bne     .bad
+        movea.l d1,a4
+        move.l  36(a4),d0
+        cmpi.l  #SCREEN,d0
+        blo     .out
+        cmpi.l  #SCREEN+$7C00,d0
+        bhi     .out
+        tst.l   d2
+        bne     .draw
+        moveq   #3,d0
+        bsr     pline
+        bra     .out
+.draw:  bsr     fin_line
+.out:   movem.l (sp)+,d1-d7/a0-a6
+        moveq   #0,d0
+        rts
+.bad:   movem.l (sp)+,d1-d7/a0-a6
         moveq   #ERR_IPAR,d0
         rts
 
@@ -1168,10 +1199,10 @@ prog_done:
         bsr     pline
         bsr     fin_line
         moveq   #4,d0
-        bsr     pline           ; wipe the bar row
+        bsr     pline           ; wipe the bar row - stays blank as a gap
         tst.l   d5
         bne     .out
-        movea.l #PBASE+4096+PXOFF+36,a5 ; 'PRESS ENTER' centred
+        movea.l #PBASE+5120+PXOFF+36,a5 ; 'PRESS ENTER' centred, row 5
         lea     s_enter(pc),a0
         bsr     puts
 .out:   movem.l (sp)+,d0-d5/a0-a1/a5

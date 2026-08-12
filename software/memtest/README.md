@@ -7,7 +7,7 @@
 A memory tester for checking a newly built or suspect QL Flex card on the QL
 itself. This is the software half of the board's bring-up procedure. It consists
 of a SuperBASIC front end (`memtest_bas`: splash screen,
-menu, configuration checks, results) and a position-independent 68008
+menu, window auto-detection, results) and a position-independent 68008
 machine-code core (`memtest_bin`, source in `memtest_asm`) that runs the
 actual test loops at full machine speed with a live progress overlay.
 
@@ -38,12 +38,15 @@ wider accesses would only re-exercise the same lines.
 
 | Menu option | What it does | When to use it |
 |---|---|---|
-| 2, safe test | Allocates a QDOS buffer (up to 448K) and tests it. The QL keeps running. | Use this for a card in the 512K configuration that QDOS can see. The buffer sits at the top of RAM, inside the expansion, so a passing result exercises the card's silicon but not its complete window. |
-| 3, window test | Tests the card's complete window directly, but only when QDOS does not manage it. The QL keeps running. | Use this for a `$C0000`-configuration card (+256K/+192K/+128K) installed **alone**. QDOS stops sizing RAM at the `$40000` hole, which leaves the window free for a complete test, including alias checks, without crashing the system. |
-| 4, destructive test | Takes over the machine in supervisor mode with interrupts off, relocates itself into base RAM at `$30000`, and tests the **entire** configured window. It draws results directly on the screen. Reset the QL afterwards. | Use this for a complete bring-up test of a 512K card or any stacked configuration. |
+| 1, safe test | Allocates a QDOS buffer (up to 448K) and tests it. The QL keeps running. | Use this for a card in the 512K configuration that QDOS can see. The buffer sits at the top of RAM, inside the expansion, so a passing result exercises the card's silicon but not its complete window. |
+| 2, window test | Tests the card's complete window directly, but only when QDOS does not manage it. The QL keeps running. | Use this for a `$C0000`-configuration card (+256K/+192K/+128K) installed **alone**. QDOS stops sizing RAM at the `$40000` hole, which leaves the window free for a complete test, including alias checks, without crashing the system. |
+| 3, destructive test | Takes over the machine in supervisor mode with interrupts off, relocates itself into base RAM at `$30000`, and tests the **entire** detected window. It draws results directly on the screen. Reset the QL afterwards. | Use this for a complete bring-up test of a 512K card or any stacked configuration. |
 
-Option 1 first: pick the jumper configuration, and the program checks that
-the RAM top QDOS detected at boot matches what the GAL should decode.
+There is no jumper-configuration menu: the window and destructive tests
+find the card's RAM themselves by probing 32K blocks above the RAM top
+QDOS reported, and show the detected window (with the configuration name
+it matches, e.g. `+192K TRUMP`) before testing. Compare it against the
+table below to confirm the jumpers decode what you expect.
 
 ## Usage
 
@@ -77,17 +80,18 @@ read (`flp1_`, `mdv1_`, `win1_`, and others), then type this after a
    asks for a device if none has the file.
 2. **The menu header** shows the RAM top QDOS found at boot and the
    expansion size derived from it. Check these values first.
-3. **Option 1** asks for the card's JP1/JP2 jumper setting and
-   NORMAL/TRUMP position. It predicts the memory window and compares it
-   against what QDOS actually found (see the table below).
-4. **Options 2/3/4** run the tests (see the modes table above). Each asks
+3. **The window and destructive tests** probe for the card's RAM and
+   print the detected window with the jumper configuration it matches
+   before running (see the table below).
+4. **Options 1/2/3** run the tests (see the modes table above). Each asks
    for a pass count (1 to 99; more passes make a soak test for intermittent
    faults) and whether to skip the retention delay (say `y` only in
    emulators). An estimated duration is shown, then a centred overlay
    panel tracks progress: `PASS n/N`, the running test's name, and a bar
    that fills once per pass.
-5. **Results**: once the panel reads `TESTS FINISHED` above `PRESS
-   ENTER`, pressing Enter clears the screen and shows the verdict
+5. **Results**: once the run ends the panel blinks `TESTS FINISHED`,
+   with `PRESS ENTER` a blank line below it. Pressing Enter clears the
+   screen and shows the verdict
    (green `ALL TESTS PASSED` / red `FAULTS FOUND`), passes completed,
    the per-test OK/FAIL×n matrix, and for failures the first fault's
    address, expected/read bytes and the data-line or address-decode
@@ -117,14 +121,15 @@ Jumper fitted = ON. Addresses from the GAL equations in
 
 With the mode header on **TRUMP** (TC2 active) the first 32K of the window
 disappears: the three `$C0000` configs start at `$C8000` instead. A quick
-hardware check of the TRUMP jumper: run the window test. It must *fail*
-if you tell it NORMAL while the jumper is on TRUMP because `$C0000` through
-`$C7FFF` no longer responds.
+hardware check of the TRUMP jumper: run the window test and look at the
+detected window. On TRUMP it must start at `$C8000` (reported as e.g.
+`+256K TRUMP`); if it still starts at `$C0000`, TC2 is not reaching the
+GAL.
 
 **Warnings**
 
 * A `$C0000`-config card alone leaves a RAM hole at `$40000`, so QDOS shows
-  only 128K. That is expected. Use the window test (option 3).
+  only 128K. That is expected. Use the window test (option 2).
 * Per the original design notes, the **+128K config cannot boot alone**:
   the QL ROM start-up check trips over the address overlap unless another
   card provides ROM just above the window. Test that card jumpered as 512K
@@ -161,12 +166,12 @@ For **sQLux**, add this to `sqlux.ini`:
 
 `RAMTOP = 768` simulates a 512K card (RAMTOP is the top *address* in K:
 128K base ends at 256K, plus 512K expansion → RAM top `$C0000` = 768K);
-the size check for config 1 must then PASS, and safe/destructive tests must
-run clean. The destructive test works in sQLux (it emulates the real screen
+the menu header must then report a 512K expansion, and safe/destructive
+tests must run clean. The destructive test works in sQLux (it emulates the real screen
 at `$20000`).
 
 **QPC2** runs SMSQ/E on a different memory map. Use it for the front end
-and safe test only; the size-check table and the destructive test assume
+and safe test only; the expected-results table and the destructive test assume
 real QL hardware or sQLux.
 
 ### ROM compatibility (JM/JS, Minerva, Minerva MK2)
@@ -179,7 +184,7 @@ Rather than assuming the system variables live at `$28000`, the front-end
 asks the OS where they really are (`MT.INF` via the core's info entry).
 One consequence is handled automatically: in **Minerva's dual-screen
 mode** the second display occupies `$28000` and the system variables move
-to `$30000`. The size checks keep working there, but the **destructive
+to `$30000`. The window detection keeps working there, but the **destructive
 test refuses to run** (it relocates into `$30000` and draws on the screen
 at `$20000`, which may not be the one displayed). The menu shows a
 warning and asks you to reboot with the second screen off. The same guard
@@ -218,6 +223,9 @@ additionally copies both files into an emulator-mapped directory.
 `CALL base+4,start,end,flags` runs the destructive suite and never returns.
 `CALL base+16,result` stores the system-variables base (from `MT.INF`) as
 a long at `result`.
+`CALL base+20,result,phase` wipes (`phase` 0) or redraws (1) the panel's
+`TESTS FINISHED` row; the front-end alternates it every half second while
+waiting for Enter, blinking the text. A no-op when the overlay is off.
 `flags`: bits 0 through 7 = pass count, bit 8 = skip retention delay. Results are
 longs in the 80-byte block at `result`: +0 fail bitmap, +4 fail address,
 +8 expected, +12 actual, +16 first failing test 1 through 5, +20 passes done,
